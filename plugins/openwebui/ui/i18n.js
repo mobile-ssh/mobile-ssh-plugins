@@ -1,0 +1,288 @@
+/* i18n for the Open WebUI plugin. */
+(function () {
+  'use strict';
+
+  var S = {
+    en: {
+      desc:         'Deploys Open WebUI — a full chat interface for Ollama — in Docker on the remote, bound to loopback. Open it here or in your phone\'s browser. Your existing Ollama models appear automatically.',
+      setup_btn:    'Install & start Open WebUI',
+      open_btn:     'Open Open WebUI',
+      open_ext:     'Open in browser ↗',
+      ready:        'Ready.',
+      setup_msg:    'Setting up Open WebUI (approve the commands; the first image pull is large)…',
+      setup_failed: 'Setup failed — is Docker installed, and is Ollama running on :11434?',
+      reachable_at: 'Open WebUI reachable at {0}',
+      first_time:   'First time: create an admin account, then pick a model — your Ollama models appear automatically.',
+      rerun:        'Re-run setup',
+      error:        'Error: {0}',
+    },
+    ar: {
+      desc:         'تنشر Open WebUI — واجهة دردشة كاملة لـ Ollama — في Docker على الخادم البعيد. افتحها هنا أو في متصفح هاتفك. نماذج Ollama الموجودة تظهر تلقائيًا.',
+      setup_btn:    'تثبيت Open WebUI وتشغيله',
+      open_btn:     'فتح Open WebUI',
+      open_ext:     'فتح في المتصفح ↗',
+      ready:        'جاهز.',
+      setup_msg:    'جارٍ إعداد Open WebUI (وافق على الأوامر؛ سحب الصورة الأولى كبير)…',
+      setup_failed: 'فشل الإعداد — هل Docker مثبت وهل Ollama يعمل على :11434؟',
+      reachable_at: 'Open WebUI متاح على {0}',
+      first_time:   'في المرة الأولى: أنشئ حساب مسؤول، ثم اختر نموذجًا — تظهر نماذج Ollama تلقائيًا.',
+      rerun:        'إعادة الإعداد',
+      error:        'خطأ: {0}',
+    },
+    bn: {
+      desc:         'রিমোটে Docker-এ Open WebUI — Ollama-র পূর্ণ চ্যাট ইন্টারফেস — ডিপ্লয় করে। এখানে বা ফোনের ব্রাউজারে খুলুন। আপনার Ollama মডেলগুলি স্বয়ংক্রিয়ভাবে প্রদর্শিত হয়।',
+      setup_btn:    'Open WebUI ইনস্টল ও চালু করুন',
+      open_btn:     'Open WebUI খুলুন',
+      open_ext:     'ব্রাউজারে খুলুন ↗',
+      ready:        'প্রস্তুত।',
+      setup_msg:    'Open WebUI সেটআপ হচ্ছে (কমান্ড অনুমোদন করুন; প্রথম ইমেজ পুল বড়)…',
+      setup_failed: 'সেটআপ ব্যর্থ — Docker ইনস্টল আছে কি? Ollama :11434-এ চলছে কি?',
+      reachable_at: '{0}-এ Open WebUI পাওয়া যাচ্ছে',
+      first_time:   'প্রথমবার: একটি অ্যাডমিন অ্যাকাউন্ট তৈরি করুন, তারপর একটি মডেল বেছে নিন।',
+      rerun:        'পুনরায় সেটআপ করুন',
+      error:        'ত্রুটি: {0}',
+    },
+    de: {
+      desc:         'Setzt Open WebUI — eine vollständige Chat-Oberfläche für Ollama — in Docker auf dem Remote-Server auf. Hier oder im Browser öffnen. Vorhandene Ollama-Modelle erscheinen automatisch.',
+      setup_btn:    'Open WebUI installieren & starten',
+      open_btn:     'Open WebUI öffnen',
+      open_ext:     'Im Browser öffnen ↗',
+      ready:        'Bereit.',
+      setup_msg:    'Open WebUI wird eingerichtet (Befehle bestätigen; erster Image-Pull ist groß)…',
+      setup_failed: 'Einrichtung fehlgeschlagen — ist Docker installiert und läuft Ollama auf :11434?',
+      reachable_at: 'Open WebUI erreichbar unter {0}',
+      first_time:   'Erstes Mal: Admin-Konto erstellen, dann ein Modell wählen — Ollama-Modelle erscheinen automatisch.',
+      rerun:        'Setup erneut ausführen',
+      error:        'Fehler: {0}',
+    },
+    es: {
+      desc:         'Despliega Open WebUI — una interfaz de chat completa para Ollama — en Docker en el servidor remoto. Ábrelo aquí o en el navegador de tu teléfono. Tus modelos de Ollama aparecen automáticamente.',
+      setup_btn:    'Instalar & iniciar Open WebUI',
+      open_btn:     'Abrir Open WebUI',
+      open_ext:     'Abrir en el navegador ↗',
+      ready:        'Listo.',
+      setup_msg:    'Configurando Open WebUI (aprueba los comandos; la primera imagen es grande)…',
+      setup_failed: 'Error en la configuración — ¿está instalado Docker y corre Ollama en :11434?',
+      reachable_at: 'Open WebUI disponible en {0}',
+      first_time:   'Primera vez: crea una cuenta de admin, luego elige un modelo — tus modelos de Ollama aparecen automáticamente.',
+      rerun:        'Volver a configurar',
+      error:        'Error: {0}',
+    },
+    fr: {
+      desc:         'Déploie Open WebUI — une interface de chat complète pour Ollama — dans Docker sur le serveur distant. Ouvre-le ici ou dans le navigateur de ton téléphone. Tes modèles Ollama apparaissent automatiquement.',
+      setup_btn:    'Installer & démarrer Open WebUI',
+      open_btn:     'Ouvrir Open WebUI',
+      open_ext:     'Ouvrir dans le navigateur ↗',
+      ready:        'Prêt.',
+      setup_msg:    'Configuration d’Open WebUI (approuver les commandes ; le premier pull d’image est volumineux)…',
+      setup_failed: 'Échec de la configuration — Docker est-il installé et Ollama tourne-t-il sur :11434 ?',
+      reachable_at: 'Open WebUI accessible à {0}',
+      first_time:   'Première fois : créer un compte admin, puis choisir un modèle — les modèles Ollama apparaissent automatiquement.',
+      rerun:        'Relancer la configuration',
+      error:        'Erreur : {0}',
+    },
+    hi: {
+      desc:         'रिमोट पर Docker में Open WebUI — Ollama के लिए एक पूर्ण चैट इंटरफ़ेस — डिप्लॉय करता है। इसे यहाँ या फोन के ब्राउज़र में खोलें। आपके Ollama मॉडल स्वचालित रूप से दिखते हैं।',
+      setup_btn:    'Open WebUI इंस्टॉल करें और शुरू करें',
+      open_btn:     'Open WebUI खोलें',
+      open_ext:     'ब्राउज़र में खोलें ↗',
+      ready:        'तैयार।',
+      setup_msg:    'Open WebUI सेटअप हो रहा है (कमांड स्वीकृत करें; पहला इमेज पुल बड़ा है)…',
+      setup_failed: 'सेटअप विफल — क्या Docker इंस्टॉल है और Ollama :11434 पर चल रहा है?',
+      reachable_at: 'Open WebUI {0} पर उपलब्ध',
+      first_time:   'पहली बार: एक व्यवस्थापक खाता बनाएं, फिर एक मॉडल चुनें — Ollama मॉडल स्वचालित रूप से दिखाई देते हैं।',
+      rerun:        'सेटअप फिर से चलाएं',
+      error:        'त्रुटि: {0}',
+    },
+    id: {
+      desc:         'Menyebarkan Open WebUI — antarmuka obrolan lengkap untuk Ollama — di Docker pada host jarak jauh. Buka di sini atau di browser ponsel Anda. Model Ollama Anda muncul secara otomatis.',
+      setup_btn:    'Pasang & jalankan Open WebUI',
+      open_btn:     'Buka Open WebUI',
+      open_ext:     'Buka di browser ↗',
+      ready:        'Siap.',
+      setup_msg:    'Menyiapkan Open WebUI (setujui perintah; pull image pertama besar)…',
+      setup_failed: 'Penyiapan gagal — apakah Docker terpasang dan Ollama berjalan di :11434?',
+      reachable_at: 'Open WebUI tersedia di {0}',
+      first_time:   'Pertama kali: buat akun admin, lalu pilih model — model Ollama Anda muncul otomatis.',
+      rerun:        'Jalankan ulang pengaturan',
+      error:        'Kesalahan: {0}',
+    },
+    ja: {
+      desc:         'リモートのDockerにOpen WebUI（OllamaのフルUIチャット）をデプロイします。ここかブラウザで開けます。既存のOllamaモデルが自動表示されます。',
+      setup_btn:    'Open WebUI をインストール・起動',
+      open_btn:     'Open WebUI を開く',
+      open_ext:     'ブラウザで開く ↗',
+      ready:        '準備完了。',
+      setup_msg:    'Open WebUI をセットアップ中（コマンドを承認してください；初回イメージ取得は大きいです）…',
+      setup_failed: 'セットアップ失敗 — Dockerはインストール済みですか？Ollamaは :11434 で動いていますか？',
+      reachable_at: 'Open WebUI は {0} で利用できます',
+      first_time:   '初回：管理者アカウントを作成してモデルを選択してください。Ollamaのモデルは自動で表示されます。',
+      rerun:        'セットアップを再実行',
+      error:        'エラー: {0}',
+    },
+    mr: {
+      desc:         'रिमोटवर Docker मध्ये Open WebUI — Ollama साठी पूर्ण चॅट इंटरफेस — तैनात करतो. इथे किंवा फोनच्या ब्राउझरमध्ये उघडा. तुमचे Ollama मॉडेल आपोआप दिसतात.',
+      setup_btn:    'Open WebUI इन्स्टॉल करा आणि सुरू करा',
+      open_btn:     'Open WebUI उघडा',
+      open_ext:     'ब्राउझरमध्ये उघडा ↗',
+      ready:        'तयार.',
+      setup_msg:    'Open WebUI सेट होत आहे (आदेश मंजूर करा; पहिला इमेज पुल मोठा आहे)…',
+      setup_failed: 'सेटअप अयशस्वी — Docker इन्स्टॉल आहे का आणि Ollama :11434 वर चालू आहे का?',
+      reachable_at: 'Open WebUI {0} वर उपलब्ध',
+      first_time:   'पहिल्यांदा: प्रशासक खाते तयार करा, नंतर मॉडेल निवडा — Ollama मॉडेल आपोआप दिसतात.',
+      rerun:        'पुन्हा सेटअप करा',
+      error:        'त्रुटी: {0}',
+    },
+    pcm: {
+      desc:         'E go deploy Open WebUI — full chat app for Ollama — for Docker on top of remote host. Open am here or inside phone browser. Your Ollama models go show automatically.',
+      setup_btn:    'Install & start Open WebUI',
+      open_btn:     'Open Open WebUI',
+      open_ext:     'Open for browser ↗',
+      ready:        'E don ready.',
+      setup_msg:    'E dey set up Open WebUI (approve the commands; first image pull big)…',
+      setup_failed: 'Setup fail — Docker installed? Ollama dey run on :11434?',
+      reachable_at: 'Open WebUI dey for {0}',
+      first_time:   'First time: create admin account, then pick model — your Ollama models go show automatically.',
+      rerun:        'Run setup again',
+      error:        'Error: {0}',
+    },
+    pt: {
+      desc:         'Implanta o Open WebUI — uma interface de chat completa para o Ollama — no Docker no host remoto. Abra aqui ou no navegador do seu celular. Seus modelos Ollama aparecem automaticamente.',
+      setup_btn:    'Instalar & iniciar Open WebUI',
+      open_btn:     'Abrir Open WebUI',
+      open_ext:     'Abrir no navegador ↗',
+      ready:        'Pronto.',
+      setup_msg:    'Configurando Open WebUI (aprove os comandos; o primeiro pull de imagem é grande)…',
+      setup_failed: 'Falha na configuração — o Docker está instalado e o Ollama está em execução em :11434?',
+      reachable_at: 'Open WebUI disponível em {0}',
+      first_time:   'Primeira vez: crie uma conta de admin, depois escolha um modelo — seus modelos Ollama aparecem automaticamente.',
+      rerun:        'Executar configuração novamente',
+      error:        'Erro: {0}',
+    },
+    ru: {
+      desc:         'Разворачивает Open WebUI — полный интерфейс чата для Ollama — в Docker на удалённом хосте. Открывайте здесь или в браузере. Ваши модели Ollama отображаются автоматически.',
+      setup_btn:    'Установить и запустить Open WebUI',
+      open_btn:     'Открыть Open WebUI',
+      open_ext:     'Открыть в браузере ↗',
+      ready:        'Готово.',
+      setup_msg:    'Настройка Open WebUI (подтверждайте команды; первый pull образа займёт время)…',
+      setup_failed: 'Ошибка настройки — Docker установлен? Ollama запущен на :11434?',
+      reachable_at: 'Open WebUI доступен по адресу {0}',
+      first_time:   'Первый раз: создайте учётную запись администратора, затем выберите модель — модели Ollama появятся автоматически.',
+      rerun:        'Повторить настройку',
+      error:        'Ошибка: {0}',
+    },
+    ta: {
+      desc:         'தொலைதூர ஹோஸ்டில் Docker-ல் Open WebUI — Ollama-விற்கான முழு சாட் இடைமுகம் — பயன்படுத்தப்படுகிறது. இங்கே அல்லது உலாவியில் திறக்கவும். Ollama மாடல்கள் தானாகவே தோன்றும்.',
+      setup_btn:    'Open WebUI நிறுவி தொடங்கு',
+      open_btn:     'Open WebUI திற',
+      open_ext:     'உலாவியில் திற ↗',
+      ready:        'தயார்.',
+      setup_msg:    'Open WebUI அமைக்கிறது (கட்டளைகளை அங்கீகரிக்கவும்; முதல் image pull பெரியது)…',
+      setup_failed: 'அமைவு தோல்வியடைந்தது — Docker நிறுவப்பட்டுள்ளதா? Ollama :11434-ல் இயங்குகிறதா?',
+      reachable_at: 'Open WebUI {0}-ல் கிடைக்கிறது',
+      first_time:   'முதல் முறை: நிர்வாகி கணக்கை உருவாக்கவும், பின் மாடலை தேர்ந்தெடுக்கவும் — Ollama மாடல்கள் தானாக தோன்றும்.',
+      rerun:        'அமைப்பை மீண்டும் இயக்கு',
+      error:        'பிழை: {0}',
+    },
+    te: {
+      desc:         'రిమోట్ హోస్ట్‌లో Docker-లో Open WebUI — Ollama కోసం పూర్తి చాట్ ఇంటర్‌ఫేస్ — డిప్లాయ్ చేస్తుంది. ఇక్కడ లేదా బ్రౌజర్‌లో తెరవండి. మీ Ollama మోడల్‌లు స్వయంచాలకంగా కనిపిస్తాయి.',
+      setup_btn:    'Open WebUI ఇన్‌స్టాల్ చేసి ప్రారంభించు',
+      open_btn:     'Open WebUI తెరువు',
+      open_ext:     'బ్రౌజర్‌లో తెరువు ↗',
+      ready:        'సిద్ధంగా ఉంది.',
+      setup_msg:    'Open WebUI సెటప్ అవుతోంది (ఆదేశాలను ఆమోదించండి; మొదటి image pull పెద్దది)…',
+      setup_failed: 'సెటప్ విఫలమైంది — Docker ఇన్‌స్టాల్ అయిందా? Ollama :11434 లో నడుస్తోందా?',
+      reachable_at: 'Open WebUI {0} వద్ద అందుబాటులో ఉంది',
+      first_time:   'మొదటిసారి: అడ్మిన్ అకౌంట్ సృష్టించండి, తర్వాత మోడల్ ఎంచుకోండి — Ollama మోడల్‌లు స్వయంచాలకంగా కనిపిస్తాయి.',
+      rerun:        'సెటప్ తిరిగి అమలు చేయి',
+      error:        'లోపం: {0}',
+    },
+    tr: {
+      desc:         'Uzak sunucuda Docker\'da Open WebUI — Ollama için tam sohbet arayüzü — dağıtır. Burada veya tarayıcıda açın. Mevcut Ollama modelleriniz otomatik görünür.',
+      setup_btn:    'Open WebUI kur & başlat',
+      open_btn:     'Open WebUI aç',
+      open_ext:     'Tarayıcıda aç ↗',
+      ready:        'Hazır.',
+      setup_msg:    'Open WebUI kuruluyor (komutları onaylayın; ilk image pull büyük)…',
+      setup_failed: 'Kurulum başarısız — Docker kurulu mu ve Ollama :11434\'te çalışıyor mu?',
+      reachable_at: 'Open WebUI {0} adresinde erişilebilir',
+      first_time:   'İlk kez: yönetici hesabı oluşturun, ardından model seçin — Ollama modelleriniz otomatik görünür.',
+      rerun:        'Kurulumu yeniden çalıştır',
+      error:        'Hata: {0}',
+    },
+    ur: {
+      desc:         'ریموٹ ہوسٹ پر Docker میں Open WebUI — Ollama کے لیے مکمل چیٹ انٹرفیس — تعینات کرتا ہے۔ یہاں یا فون کے براؤزر میں کھولیں۔ آپ کے Ollama ماڈل خود بخود نظر آتے ہیں۔',
+      setup_btn:    'Open WebUI انسٹال کریں اور شروع کریں',
+      open_btn:     'Open WebUI کھولیں',
+      open_ext:     'براؤزر میں کھولیں ↗',
+      ready:        'تیار۔',
+      setup_msg:    'Open WebUI سیٹ اپ ہو رہا ہے (کمانڈز منظور کریں؛ پہلا image pull بڑا ہے)…',
+      setup_failed: 'سیٹ اپ ناکام — Docker انسٹال ہے؟ Ollama :11434 پر چل رہا ہے؟',
+      reachable_at: 'Open WebUI {0} پر دستیاب ہے',
+      first_time:   'پہلی بار: ایڈمن اکاؤنٹ بنائیں، پھر ماڈل منتخب کریں — آپ کے Ollama ماڈل خود بخود ظاہر ہوں گے۔',
+      rerun:        'سیٹ اپ دوبارہ چلائیں',
+      error:        'خرابی: {0}',
+    },
+    'zh-CN': {
+      desc:         '在远程主机的 Docker 中部署 Open WebUI（Ollama 全功能聊天界面）。可在此处或手机浏览器中打开。您已有的 Ollama 模型会自动出现。',
+      setup_btn:    '安装并启动 Open WebUI',
+      open_btn:     '打开 Open WebUI',
+      open_ext:     '在浏览器中打开 ↗',
+      ready:        '就绪。',
+      setup_msg:    '正在安装 Open WebUI（请批准命令；首次拉取镜像较大）…',
+      setup_failed: '安装失败 — Docker 已安装且 Ollama 在 :11434 上运行？',
+      reachable_at: 'Open WebUI 可在 {0} 访问',
+      first_time:   '首次使用：创建管理员账户，然后选择模型 — 您的 Ollama 模型会自动出现。',
+      rerun:        '重新安装',
+      error:        '错误：{0}',
+    },
+    'zh-HK': {
+      desc:         '在遠端主機的 Docker 中部署 Open WebUI（Ollama 全功能聊天介面）。可在此處或手機瀏覽器中開啟。您現有的 Ollama 模型會自動出現。',
+      setup_btn:    '安裝並啟動 Open WebUI',
+      open_btn:     '開啟 Open WebUI',
+      open_ext:     '在瀏覽器中開啟 ↗',
+      ready:        '就緒。',
+      setup_msg:    '正在安裝 Open WebUI（請批准指令；首次拉取映像較大）…',
+      setup_failed: '安裝失敗 — Docker 已安裝且 Ollama 在 :11434 上運行？',
+      reachable_at: 'Open WebUI 可在 {0} 存取',
+      first_time:   '首次使用：建立管理員帳戶，然後選擇模型 — 您的 Ollama 模型會自動出現。',
+      rerun:        '重新安裝',
+      error:        '錯誤：{0}',
+    },
+  };
+  S['ar-EG'] = S['ar'];
+
+  var MAP = { 'in': 'id', 'zh-hans': 'zh-CN', 'zh-sg': 'zh-CN', 'zh-tw': 'zh-HK', 'zh-hant': 'zh-HK' };
+
+  function resolve() {
+    var nav = (navigator.language || 'en').toLowerCase();
+    var mapped = MAP[nav] || nav;
+    if (S[mapped]) return mapped;
+    var upper = nav.replace(/-([a-z]{2})$/, function (_, r) { return '-' + r.toUpperCase(); });
+    if (S[upper]) return upper;
+    var base = nav.split('-')[0];
+    if (S[base]) return base;
+    return 'en';
+  }
+
+  var locale = resolve();
+  var dict = S[locale];
+
+  window.t = function (key) {
+    var s = (dict && dict[key] !== undefined) ? dict[key] : (S.en[key] !== undefined ? S.en[key] : key);
+    for (var i = 1; i < arguments.length; i++) {
+      s = s.replace('{' + (i - 1) + '}', arguments[i]);
+    }
+    return s;
+  };
+
+  document.addEventListener('DOMContentLoaded', function () {
+    document.querySelectorAll('[data-i18n]').forEach(function (el) {
+      el.textContent = t(el.dataset.i18n);
+    });
+    if (locale === 'ar' || locale === 'ar-EG' || locale === 'ur') {
+      document.documentElement.setAttribute('dir', 'rtl');
+    }
+  });
+})();

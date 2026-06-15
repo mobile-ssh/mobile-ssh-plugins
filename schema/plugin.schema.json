@@ -1,0 +1,101 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mobile-ssh.github.io/schema/plugin.schema.json",
+  "title": "Mobile SSH plugin manifest",
+  "description": "manifest.json for a Mobile SSH plugin. A plugin = this manifest + a WebView UI + an optional server recipe + an optional tunnel.",
+  "type": "object",
+  "required": ["id", "name", "description", "version", "minBridgeVersion", "capabilities", "sessionRequirement", "ui"],
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "description": "Stable reverse-DNS id, e.g. io.github.mobilessh.vscode",
+      "type": "string",
+      "pattern": "^[a-z0-9]+(\\.[a-z0-9]+)+$"
+    },
+    "name": { "type": "string", "minLength": 1, "maxLength": 40 },
+    "description": { "type": "string", "minLength": 1, "maxLength": 200 },
+    "category": {
+      "description": "Grouping in the host plugin list (becomes the catalog `role`).",
+      "enum": ["connectivity", "terminal", "ide", "llm", "notebook", "push", "other"]
+    },
+    "version": { "$ref": "#/$defs/semver" },
+    "minBridgeVersion": { "$ref": "#/$defs/semver" },
+    "icon": { "description": "Relative path to an SVG/PNG icon in the plugin dir.", "type": "string" },
+    "author": { "type": "string" },
+    "homepage": { "type": "string", "format": "uri" },
+    "capabilities": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "enum": ["SSH_EXEC", "TUNNEL", "HTTP_LOOPBACK", "HTTP_INTERNET", "STORAGE", "NOTIFICATIONS"]
+      }
+    },
+    "sessionRequirement": {
+      "description": "REQUIRES_ACTIVE_SESSION = launched from a connected pane; PICKS_SERVER = chooses + connects; STANDALONE = no SSH.",
+      "enum": ["REQUIRES_ACTIVE_SESSION", "PICKS_SERVER", "STANDALONE"]
+    },
+    "ui": {
+      "type": "object",
+      "required": ["entry"],
+      "additionalProperties": false,
+      "properties": {
+        "entry": { "description": "Relative path to the plugin's HTML entry, e.g. ui/index.html", "type": "string" }
+      }
+    },
+    "recipe": {
+      "description": "Relative path to a recipe.json (validated against recipe.schema.json) for server-side install/launch.",
+      "type": "string"
+    },
+    "tunnel": {
+      "description": "Default tunnel for this plugin's service. The host opens it and substitutes {tunnelUrl}/{port} in serviceUrl.",
+      "type": "object",
+      "required": ["port"],
+      "additionalProperties": false,
+      "properties": {
+        "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+        "remoteHost": { "type": "string" },
+        "backend": { "enum": ["ssh-forward", "tailscale-serve"] }
+      }
+    },
+    "serviceUrl": {
+      "description": "Template for the bridge-less service WebView. Placeholders: {tunnelUrl}, {port}, {localPort}, and {{captureVar}} from the recipe.",
+      "type": "string"
+    },
+    "settings": {
+      "description": "User-editable settings the host renders into a form; values land in plugin storage.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["key", "label", "type"],
+        "additionalProperties": false,
+        "properties": {
+          "key": { "type": "string", "pattern": "^[A-Za-z0-9_.-]+$" },
+          "label": { "type": "string" },
+          "type": { "enum": ["string", "secret", "boolean", "number", "url", "select"] },
+          "default": {},
+          "placeholder": { "type": "string" },
+          "help": { "type": "string" },
+          "options": {
+            "description": "Choices for a `select` setting.",
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["value", "label"],
+              "additionalProperties": false,
+              "properties": {
+                "value": { "type": "string" },
+                "label": { "type": "string" }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "semver": {
+      "type": "string",
+      "pattern": "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(?:-[0-9A-Za-z.-]+)?$"
+    }
+  }
+}

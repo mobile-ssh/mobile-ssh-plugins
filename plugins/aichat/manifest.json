@@ -1,0 +1,48 @@
+{
+  "id": "io.github.mobilessh.aichat",
+  "name": "AI Chat",
+  "description": "Chat with a model running on the remote (Ollama) over a port forward — tokens stream live.",
+  "version": "1.0.0",
+  "minBridgeVersion": "1.0.0",
+  "category": "llm",
+  "icon": "icon.svg",
+  "author": "Mobile SSH",
+  "capabilities": ["SSH_EXEC", "TUNNEL", "HTTP_LOOPBACK", "STORAGE"],
+  "sessionRequirement": "REQUIRES_ACTIVE_SESSION",
+  "ui": { "entry": "ui/index.html" },
+  "recipe": "recipe.json",
+  "tunnel": { "port": 11434 },
+  "settings": [
+    {
+      "key": "model",
+      "label": "Model",
+      "type": "select",
+      "default": "llama3.2:1b",
+      "help": "Pulled on the server via Ollama. Smaller = faster; larger = better.",
+      "options": [
+        { "value": "llama3.2:1b", "label": "Llama 3.2 (1B) — tiny, fast" },
+        { "value": "llama3.2:3b", "label": "Llama 3.2 (3B)" },
+        { "value": "llama3.1:8b", "label": "Llama 3.1 (8B)" },
+        { "value": "llama3.3:70b", "label": "Llama 3.3 (70B) — big server" },
+        { "value": "qwen2.5:3b", "label": "Qwen2.5 (3B)" },
+        { "value": "qwen2.5:7b", "label": "Qwen2.5 (7B)" },
+        { "value": "qwen2.5:14b", "label": "Qwen2.5 (14B)" },
+        { "value": "qwen2.5:32b", "label": "Qwen2.5 (32B)" },
+        { "value": "qwen2.5-coder:7b", "label": "Qwen2.5 Coder (7B)" },
+        { "value": "gemma2:2b", "label": "Gemma 2 (2B)" },
+        { "value": "gemma2:9b", "label": "Gemma 2 (9B)" },
+        { "value": "gemma2:27b", "label": "Gemma 2 (27B)" },
+        { "value": "gemma3:1b", "label": "Gemma 3 (1B)" },
+        { "value": "gemma3:4b", "label": "Gemma 3 (4B)" },
+        { "value": "gemma3:12b", "label": "Gemma 3 (12B)" },
+        { "value": "gemma3:27b", "label": "Gemma 3 (27B) — newest Gemma" },
+        { "value": "gemma3n:e2b", "label": "Gemma 3n E2B — efficient, low RAM" },
+        { "value": "gemma3n:e4b", "label": "Gemma 3n E4B — efficient" },
+        { "value": "phi4", "label": "Phi-4 (14B)" },
+        { "value": "mistral:7b", "label": "Mistral (7B)" },
+        { "value": "deepseek-r1:7b", "label": "DeepSeek-R1 (7B) — reasoning" },
+        { "value": "deepseek-r1:14b", "label": "DeepSeek-R1 (14B) — reasoning" }
+      ]
+    }
+  ]
+}

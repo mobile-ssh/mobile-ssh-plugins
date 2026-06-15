@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm install
+      - name: Build catalog (stamped) and verify it matches the committed file
+        run: |
+          CATALOG_UPDATED="$(date -u +%Y-%m-%dT%H:%M:%SZ)" node tools/build-catalog.mjs
+          # The committed catalog should match a fresh build except for the `updated` timestamp.
+          git diff --exit-code --ignore-matching-lines='"updated"' catalog/plugins.json \
+            || (echo "::error::catalog/plugins.json is stale — run 'npm run build-catalog' and commit" && exit 1)
+      - name: Validate manifests, recipes, and catalog
+        run: node tools/validate.mjs
+      - name: Lint plugin UI JavaScript (syntax check)
+        run: |
+          set -e
+          for f in $(find plugins template-plugin sdk -name '*.js' 2>/dev/null); do
+            node --check "$f"
+          done

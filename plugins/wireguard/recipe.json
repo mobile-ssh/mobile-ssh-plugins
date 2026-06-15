@@ -1,0 +1,22 @@
+{
+  "description": "Run the wg-easy WireGuard server in Docker. WireGuard on 51820/udp; admin web UI on loopback 51821 (reached over the tunnel). Complete the first-run setup wizard in the web UI.",
+  "requires": ["docker"],
+  "steps": [
+    {
+      "id": "check-docker",
+      "description": "Verify Docker is installed (install Docker first if this fails).",
+      "run": "docker --version"
+    },
+    {
+      "id": "run",
+      "description": "Start the wg-easy container (v15). Admin UI bound to loopback :51821; VPN on 51820/udp.",
+      "check": "docker ps --filter name=wg-easy --filter status=running -q | grep -q .",
+      "run": "docker run -d --name wg-easy --restart unless-stopped -v ~/.wg-easy:/etc/wireguard -p 51820:51820/udp -p 127.0.0.1:51821:51821/tcp --cap-add NET_ADMIN --cap-add SYS_MODULE --sysctl net.ipv4.ip_forward=1 --sysctl net.ipv4.conf.all.src_valid_mark=1 ghcr.io/wg-easy/wg-easy:15",
+      "sudo": true,
+      "forwardPort": 51821
+    }
+  ],
+  "uninstall": [
+    { "id": "remove", "description": "Stop and remove the wg-easy container and its data.", "run": "docker rm -f wg-easy 2>/dev/null || true; rm -rf ~/.wg-easy", "sudo": true, "continueOnError": true }
+  ]
+}

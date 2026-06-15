@@ -1,0 +1,307 @@
+/* i18n for the VS Code plugin. */
+(function () {
+  'use strict';
+
+  var S = {
+    en: {
+      desc:           'Installs code-server on the remote and opens the editor here. Run your agent in its terminal — it keeps running server-side across reconnects.',
+      setup_btn:      'Set up & launch',
+      open_btn:       'Open VS Code',
+      open_ext:       'Open in browser ↗',
+      ready:          'Ready.',
+      running_setup:  'Running setup (you will be asked to approve the commands)…',
+      setup_failed:   'Setup failed. See log above.',
+      opening_tunnel: 'Opening tunnel to code-server (port 8080)…',
+      reachable_at:   'code-server reachable at {0} ({1})',
+      login_password: 'Login password:',
+      rerun:          'Re-run setup',
+      error:          'Error: {0}',
+    },
+    ar: {
+      desc:           'يثبّت code-server على الخادم البعيد ويفتح المحرر هنا. شغّل وكيلك في الطرفية — يبقى يعمل من جهة الخادم عبر إعادة الاتصالات.',
+      setup_btn:      'إعداد وتشغيل',
+      open_btn:       'فتح VS Code',
+      open_ext:       'فتح في المتصفح ↗',
+      ready:          'جاهز.',
+      running_setup:  'جارٍ الإعداد (ستُطلب منك الموافقة على الأوامر)…',
+      setup_failed:   'فشل الإعداد. راجع السجل أعلاه.',
+      opening_tunnel: 'فتح النفق إلى code-server (المنفذ 8080)…',
+      reachable_at:   'code-server متاح على {0} ({1})',
+      login_password: 'كلمة مرور تسجيل الدخول:',
+      rerun:          'إعادة الإعداد',
+      error:          'خطأ: {0}',
+    },
+    bn: {
+      desc:           'রিমোটে code-server ইনস্টল করে এখানে এডিটর খোলে। এর টার্মিনালে আপনার এজেন্ট চালান — পুনরায় সংযোগ জুড়ে সার্ভার সাইডে চলতে থাকে।',
+      setup_btn:      'সেটআপ করুন ও চালু করুন',
+      open_btn:       'VS Code খুলুন',
+      open_ext:       'ব্রাউজারে খুলুন ↗',
+      ready:          'প্রস্তুত।',
+      running_setup:  'সেটআপ চলছে (আপনাকে কমান্ড অনুমোদন করতে বলা হবে)…',
+      setup_failed:   'সেটআপ ব্যর্থ। উপরের লগ দেখুন।',
+      opening_tunnel: 'code-server-এ টানেল খুলছে (পোর্ট 8080)…',
+      reachable_at:   'code-server {0} ({1})-এ পাওয়া যাচ্ছে',
+      login_password: 'লগইন পাসওয়ার্ড:',
+      rerun:          'পুনরায় সেটআপ করুন',
+      error:          'ত্রুটি: {0}',
+    },
+    de: {
+      desc:           'Installiert code-server auf dem Remote-Server und öffnet den Editor hier. Starte deinen Agenten im Terminal — er läuft serverseitig auch nach Verbindungsabbrüchen.',
+      setup_btn:      'Einrichten & starten',
+      open_btn:       'VS Code öffnen',
+      open_ext:       'Im Browser öffnen ↗',
+      ready:          'Bereit.',
+      running_setup:  'Einrichtung läuft (du wirst gebeten, Befehle zu bestätigen)…',
+      setup_failed:   'Einrichtung fehlgeschlagen. Protokoll oben prüfen.',
+      opening_tunnel: 'Tunnel zu code-server öffnen (Port 8080)…',
+      reachable_at:   'code-server erreichbar unter {0} ({1})',
+      login_password: 'Anmeldepasswort:',
+      rerun:          'Setup erneut ausführen',
+      error:          'Fehler: {0}',
+    },
+    es: {
+      desc:           'Instala code-server en el servidor remoto y abre el editor aquí. Ejecuta tu agente en su terminal — sigue corriendo del lado del servidor entre reconexiones.',
+      setup_btn:      'Configurar & lanzar',
+      open_btn:       'Abrir VS Code',
+      open_ext:       'Abrir en el navegador ↗',
+      ready:          'Listo.',
+      running_setup:  'Ejecutando la configuración (se te pedirá aprobar los comandos)…',
+      setup_failed:   'Configuración fallida. Ver registro arriba.',
+      opening_tunnel: 'Abriendo túnel hacia code-server (puerto 8080)…',
+      reachable_at:   'code-server accesible en {0} ({1})',
+      login_password: 'Contraseña de acceso:',
+      rerun:          'Volver a configurar',
+      error:          'Error: {0}',
+    },
+    fr: {
+      desc:           'Installe code-server sur le serveur distant et ouvre l'éditeur ici. Lance ton agent dans son terminal — il continue à tourner côté serveur entre les reconnexions.',
+      setup_btn:      'Configurer & lancer',
+      open_btn:       'Ouvrir VS Code',
+      open_ext:       'Ouvrir dans le navigateur ↗',
+      ready:          'Prêt.',
+      running_setup:  'Configuration en cours (il vous sera demandé d'approuver les commandes)…',
+      setup_failed:   'Échec de la configuration. Voir le journal ci-dessus.',
+      opening_tunnel: 'Ouverture du tunnel vers code-server (port 8080)…',
+      reachable_at:   'code-server accessible à {0} ({1})',
+      login_password: 'Mot de passe de connexion :',
+      rerun:          'Relancer la configuration',
+      error:          'Erreur : {0}',
+    },
+    hi: {
+      desc:           'रिमोट पर code-server इंस्टॉल करता है और यहाँ एडिटर खोलता है। इसके टर्मिनल में अपना एजेंट चलाएं — यह रिकनेक्ट के दौरान सर्वर साइड पर चलता रहता है।',
+      setup_btn:      'सेट अप करें और लॉन्च करें',
+      open_btn:       'VS Code खोलें',
+      open_ext:       'ब्राउज़र में खोलें ↗',
+      ready:          'तैयार।',
+      running_setup:  'सेटअप चल रहा है (आपसे कमांड स्वीकृत करने के लिए कहा जाएगा)…',
+      setup_failed:   'सेटअप विफल। ऊपर लॉग देखें।',
+      opening_tunnel: 'code-server के लिए टनल खोल रहे हैं (पोर्ट 8080)…',
+      reachable_at:   'code-server {0} ({1}) पर उपलब्ध',
+      login_password: 'लॉगिन पासवर्ड:',
+      rerun:          'सेटअप फिर से चलाएं',
+      error:          'त्रुटि: {0}',
+    },
+    id: {
+      desc:           'Memasang code-server di host jarak jauh dan membuka editor di sini. Jalankan agen Anda di terminalnya — tetap berjalan di sisi server melewati koneksi ulang.',
+      setup_btn:      'Siapkan & luncurkan',
+      open_btn:       'Buka VS Code',
+      open_ext:       'Buka di browser ↗',
+      ready:          'Siap.',
+      running_setup:  'Menjalankan setup (Anda akan diminta menyetujui perintah)…',
+      setup_failed:   'Setup gagal. Lihat log di atas.',
+      opening_tunnel: 'Membuka terowongan ke code-server (port 8080)…',
+      reachable_at:   'code-server tersedia di {0} ({1})',
+      login_password: 'Kata sandi login:',
+      rerun:          'Jalankan ulang pengaturan',
+      error:          'Kesalahan: {0}',
+    },
+    ja: {
+      desc:           'リモートにcode-serverをインストールしてエディタをここで開きます。ターミナルでエージェントを実行すれば、再接続後もサーバー側で動き続けます。',
+      setup_btn:      'セットアップ・起動',
+      open_btn:       'VS Code を開く',
+      open_ext:       'ブラウザで開く ↗',
+      ready:          '準備完了。',
+      running_setup:  'セットアップ実行中（コマンドの承認を求められます）…',
+      setup_failed:   'セットアップ失敗。上のログを確認してください。',
+      opening_tunnel: 'code-server へのトンネルを開いています（ポート 8080）…',
+      reachable_at:   'code-server は {0} ({1}) で利用できます',
+      login_password: 'ログインパスワード:',
+      rerun:          'セットアップを再実行',
+      error:          'エラー: {0}',
+    },
+    mr: {
+      desc:           'रिमोटवर code-server इन्स्टॉल करतो आणि इथे एडिटर उघडतो. त्याच्या टर्मिनलमध्ये तुमचा एजंट चालवा — रिकनेक्ट दरम्यानही सर्व्हर साइडवर चालू राहतो.',
+      setup_btn:      'सेट अप करा आणि सुरू करा',
+      open_btn:       'VS Code उघडा',
+      open_ext:       'ब्राउझरमध्ये उघडा ↗',
+      ready:          'तयार.',
+      running_setup:  'सेटअप चालू आहे (तुम्हाला आदेश मंजूर करण्यास सांगितले जाईल)…',
+      setup_failed:   'सेटअप अयशस्वी. वरील लॉग पहा.',
+      opening_tunnel: 'code-server साठी टनल उघडत आहे (पोर्ट 8080)…',
+      reachable_at:   'code-server {0} ({1}) वर उपलब्ध',
+      login_password: 'लॉगिन पासवर्ड:',
+      rerun:          'पुन्हा सेटअप करा',
+      error:          'त्रुटी: {0}',
+    },
+    pcm: {
+      desc:           'E go install code-server for remote host and open editor here. Run your agent inside the terminal — e go keep running server-side even when you reconnect.',
+      setup_btn:      'Set up & launch',
+      open_btn:       'Open VS Code',
+      open_ext:       'Open for browser ↗',
+      ready:          'E don ready.',
+      running_setup:  'Setup dey run (dem go ask you to approve the commands)…',
+      setup_failed:   'Setup fail. Check log wey dey above.',
+      opening_tunnel: 'E dey open tunnel to code-server (port 8080)…',
+      reachable_at:   'code-server dey for {0} ({1})',
+      login_password: 'Login password:',
+      rerun:          'Run setup again',
+      error:          'Error: {0}',
+    },
+    pt: {
+      desc:           'Instala o code-server no host remoto e abre o editor aqui. Execute seu agente no terminal — ele continua rodando do lado do servidor entre reconexões.',
+      setup_btn:      'Configurar & lançar',
+      open_btn:       'Abrir VS Code',
+      open_ext:       'Abrir no navegador ↗',
+      ready:          'Pronto.',
+      running_setup:  'Executando a configuração (será solicitado que você aprove os comandos)…',
+      setup_failed:   'Falha na configuração. Ver registro acima.',
+      opening_tunnel: 'Abrindo túnel para o code-server (porta 8080)…',
+      reachable_at:   'code-server disponível em {0} ({1})',
+      login_password: 'Senha de login:',
+      rerun:          'Executar configuração novamente',
+      error:          'Erro: {0}',
+    },
+    ru: {
+      desc:           'Устанавливает code-server на удалённый хост и открывает редактор здесь. Запустите агента в его терминале — он будет работать на сервере между переподключениями.',
+      setup_btn:      'Настроить и запустить',
+      open_btn:       'Открыть VS Code',
+      open_ext:       'Открыть в браузере ↗',
+      ready:          'Готово.',
+      running_setup:  'Запуск настройки (потребуется подтвердить команды)…',
+      setup_failed:   'Ошибка настройки. Смотрите лог выше.',
+      opening_tunnel: 'Открываю туннель к code-server (порт 8080)…',
+      reachable_at:   'code-server доступен по адресу {0} ({1})',
+      login_password: 'Пароль для входа:',
+      rerun:          'Повторить настройку',
+      error:          'Ошибка: {0}',
+    },
+    ta: {
+      desc:           'தொலைதூர ஹோஸ்டில் code-server நிறுவி இங்கே எடிட்டரை திறக்கிறது. அதன் டெர்மினலில் உங்கள் ஏஜென்டை இயக்கவும் — மறுசெயல்பாட்டின் போதும் சர்வர் பக்கத்தில் தொடர்கிறது.',
+      setup_btn:      'அமைத்து தொடங்கு',
+      open_btn:       'VS Code திற',
+      open_ext:       'உலாவியில் திற ↗',
+      ready:          'தயார்.',
+      running_setup:  'அமைப்பு இயங்குகிறது (கட்டளைகளை அங்கீகரிக்க கேட்கப்படும்)…',
+      setup_failed:   'அமைவு தோல்வியடைந்தது. மேலே உள்ள பதிவைப் பாருங்கள்.',
+      opening_tunnel: 'code-server-க்கு சுரங்கம் திறக்கிறது (போர்ட் 8080)…',
+      reachable_at:   'code-server {0} ({1})-ல் கிடைக்கிறது',
+      login_password: 'உள்நுழைவு கடவுச்சொல்:',
+      rerun:          'அமைப்பை மீண்டும் இயக்கு',
+      error:          'பிழை: {0}',
+    },
+    te: {
+      desc:           'రిమోట్ హోస్ట్‌లో code-server ఇన్‌స్టాల్ చేసి ఇక్కడ ఎడిటర్ తెరుస్తుంది. దాని టెర్మినల్‌లో మీ ఏజెంట్‌ని అమలు చేయండి — రీకనెక్ట్‌ల మధ్య సర్వర్ వైపు నడుస్తూనే ఉంటుంది.',
+      setup_btn:      'సెటప్ చేసి లాంచ్ చేయి',
+      open_btn:       'VS Code తెరువు',
+      open_ext:       'బ్రౌజర్‌లో తెరువు ↗',
+      ready:          'సిద్ధంగా ఉంది.',
+      running_setup:  'సెటప్ అమలవుతోంది (ఆదేశాలను ఆమోదించమని అడుగుతారు)…',
+      setup_failed:   'సెటప్ విఫలమైంది. పైన లాగ్ చూడండి.',
+      opening_tunnel: 'code-server కి టన్నెల్ తెరుస్తోంది (పోర్ట్ 8080)…',
+      reachable_at:   'code-server {0} ({1}) వద్ద అందుబాటులో ఉంది',
+      login_password: 'లాగిన్ పాస్‌వర్డ్:',
+      rerun:          'సెటప్ తిరిగి అమలు చేయి',
+      error:          'లోపం: {0}',
+    },
+    tr: {
+      desc:           'Uzak sunucuya code-server kurar ve editörü burada açar. Terminalinde ajanını çalıştır — sunucu tarafında yeniden bağlantılar arasında çalışmaya devam eder.',
+      setup_btn:      'Kur & başlat',
+      open_btn:       'VS Code aç',
+      open_ext:       'Tarayıcıda aç ↗',
+      ready:          'Hazır.',
+      running_setup:  'Kurulum çalışıyor (komutları onaylamanız istenecek)…',
+      setup_failed:   'Kurulum başarısız. Yukarıdaki günlüğe bakın.',
+      opening_tunnel: 'code-server\'a tünel açılıyor (port 8080)…',
+      reachable_at:   'code-server {0} ({1}) adresinde erişilebilir',
+      login_password: 'Giriş şifresi:',
+      rerun:          'Kurulumu yeniden çalıştır',
+      error:          'Hata: {0}',
+    },
+    ur: {
+      desc:           'ریموٹ ہوسٹ پر code-server انسٹال کرکے یہاں ایڈیٹر کھولتا ہے۔ اس کے ٹرمینل میں اپنا ایجنٹ چلائیں — دوبارہ کنیکشن کے دوران بھی سرور سائڈ پر چلتا رہتا ہے۔',
+      setup_btn:      'سیٹ اپ کریں اور لانچ کریں',
+      open_btn:       'VS Code کھولیں',
+      open_ext:       'براؤزر میں کھولیں ↗',
+      ready:          'تیار۔',
+      running_setup:  'سیٹ اپ چل رہا ہے (آپ سے کمانڈز منظور کرنے کو کہا جائے گا)…',
+      setup_failed:   'سیٹ اپ ناکام۔ اوپر لاگ دیکھیں۔',
+      opening_tunnel: 'code-server کی طرف ٹنل کھل رہی ہے (پورٹ 8080)…',
+      reachable_at:   'code-server {0} ({1}) پر دستیاب ہے',
+      login_password: 'لاگ ان پاس ورڈ:',
+      rerun:          'سیٹ اپ دوبارہ چلائیں',
+      error:          'خرابی: {0}',
+    },
+    'zh-CN': {
+      desc:           '在远程主机上安装 code-server 并在此处打开编辑器。在其终端中运行您的代理 — 跨次重连持续在服务器端运行。',
+      setup_btn:      '安装并启动',
+      open_btn:       '打开 VS Code',
+      open_ext:       '在浏览器中打开 ↗',
+      ready:          '就绪。',
+      running_setup:  '正在运行安装（将请求您批准命令）…',
+      setup_failed:   '安装失败。请查看上方日志。',
+      opening_tunnel: '正在向 code-server 开启隧道（端口 8080）…',
+      reachable_at:   'code-server 可在 {0} ({1}) 访问',
+      login_password: '登录密码：',
+      rerun:          '重新安装',
+      error:          '错误：{0}',
+    },
+    'zh-HK': {
+      desc:           '在遠端主機上安裝 code-server 並在此處開啟編輯器。在其終端機中執行您的代理 — 跨次重新連接持續在伺服器端運行。',
+      setup_btn:      '安裝並啟動',
+      open_btn:       '開啟 VS Code',
+      open_ext:       '在瀏覽器中開啟 ↗',
+      ready:          '就緒。',
+      running_setup:  '正在執行安裝（將請求您批准指令）…',
+      setup_failed:   '安裝失敗。請查看上方日誌。',
+      opening_tunnel: '正在向 code-server 開啟隧道（連接埠 8080）…',
+      reachable_at:   'code-server 可在 {0} ({1}) 存取',
+      login_password: '登入密碼：',
+      rerun:          '重新安裝',
+      error:          '錯誤：{0}',
+    },
+  };
+  S['ar-EG'] = S['ar'];
+
+  var MAP = { 'in': 'id', 'zh-hans': 'zh-CN', 'zh-sg': 'zh-CN', 'zh-tw': 'zh-HK', 'zh-hant': 'zh-HK' };
+
+  function resolve() {
+    var nav = (navigator.language || 'en').toLowerCase();
+    var mapped = MAP[nav] || nav;
+    if (S[mapped]) return mapped;
+    var upper = nav.replace(/-([a-z]{2})$/, function (_, r) { return '-' + r.toUpperCase(); });
+    if (S[upper]) return upper;
+    var base = nav.split('-')[0];
+    if (S[base]) return base;
+    return 'en';
+  }
+
+  var locale = resolve();
+  var dict = S[locale];
+
+  window.t = function (key) {
+    var s = (dict && dict[key] !== undefined) ? dict[key] : (S.en[key] !== undefined ? S.en[key] : key);
+    for (var i = 1; i < arguments.length; i++) {
+      s = s.replace('{' + (i - 1) + '}', arguments[i]);
+    }
+    return s;
+  };
+
+  document.addEventListener('DOMContentLoaded', function () {
+    document.querySelectorAll('[data-i18n]').forEach(function (el) {
+      el.textContent = t(el.dataset.i18n);
+    });
+    if (locale === 'ar' || locale === 'ar-EG' || locale === 'ur') {
+      document.documentElement.setAttribute('dir', 'rtl');
+    }
+  });
+})();

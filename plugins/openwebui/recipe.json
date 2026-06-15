@@ -1,0 +1,40 @@
+{
+  "description": "Run Open WebUI (a full Ollama chat interface) in Docker on the remote. Uses host networking so it talks to your existing Ollama on 127.0.0.1:11434 with no Ollama reconfiguration; HOST=127.0.0.1 keeps it bound to the server's loopback (reached only over the SSH tunnel). Note: with host networking that loopback bind is enforced by the app honoring HOST, not by Docker. First launch: create an admin account in the browser.",
+  "requires": ["docker"],
+  "steps": [
+    {
+      "id": "check-docker",
+      "description": "Verify Docker is installed (install Docker first if this fails).",
+      "run": "docker --version"
+    },
+    {
+      "id": "ollama-check",
+      "description": "Check Ollama is reachable on :11434 (Open WebUI connects to it).",
+      "check": "curl -fsS http://127.0.0.1:11434/api/version >/dev/null 2>&1",
+      "run": "echo 'Ollama not detected on 127.0.0.1:11434 — install the AI Chat plugin or start Ollama. You can also set the URL inside Open WebUI later.'",
+      "continueOnError": true
+    },
+    {
+      "id": "run",
+      "description": "Start the Open WebUI container bound to loopback 127.0.0.1:3000 (host networking → reaches host Ollama). First run pulls a multi-GB image.",
+      "check": "docker ps --filter name=open-webui --filter status=running -q | grep -q .",
+      "run": "docker rm -f open-webui 2>/dev/null || true; docker run -d --name open-webui --restart unless-stopped --network=host -e HOST=127.0.0.1 -e PORT=3000 -e OLLAMA_BASE_URL=http://127.0.0.1:11434 -v open-webui:/app/backend/data ghcr.io/open-webui/open-webui:main",
+      "sudo": true,
+      "stream": true,
+      "timeoutMs": 900000,
+      "forwardPort": 3000
+    },
+    {
+      "id": "wait",
+      "description": "Wait for Open WebUI to finish starting (database migrations on first run).",
+      "check": "curl -fsS http://127.0.0.1:3000/health >/dev/null 2>&1",
+      "run": "for i in $(seq 1 90); do curl -fsS http://127.0.0.1:3000/health >/dev/null 2>&1 && exit 0; sleep 2; done; echo 'Open WebUI is still starting — give it a moment, then open it.'",
+      "continueOnError": true,
+      "timeoutMs": 200000
+    }
+  ],
+  "uninstall": [
+    { "id": "remove", "description": "Stop and remove the Open WebUI container.", "run": "docker rm -f open-webui 2>/dev/null || true", "sudo": true, "continueOnError": true },
+    { "id": "remove-data", "description": "Remove the Open WebUI data volume (accounts, chats, settings).", "run": "docker volume rm open-webui 2>/dev/null || true", "sudo": true, "continueOnError": true }
+  ]
+}

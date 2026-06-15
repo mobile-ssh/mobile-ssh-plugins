@@ -1,0 +1,18 @@
+{
+  "id": "io.github.mobilessh.template",
+  "name": "Template Plugin",
+  "description": "Copy-paste starter: a server recipe, a tunnel, an HTTP call, storage, and a themed UI.",
+  "version": "0.1.0",
+  "minBridgeVersion": "1.0.0",
+  "icon": "icon.svg",
+  "author": "you",
+  "capabilities": ["SSH_EXEC", "TUNNEL", "HTTP_LOOPBACK", "STORAGE"],
+  "sessionRequirement": "REQUIRES_ACTIVE_SESSION",
+  "ui": { "entry": "ui/index.html" },
+  "recipe": "recipe.json",
+  "tunnel": { "port": 8000 },
+  "serviceUrl": "{tunnelUrl}/",
+  "settings": [
+    { "key": "greeting", "label": "Greeting text", "type": "string", "default": "hello" }
+  ]
+}

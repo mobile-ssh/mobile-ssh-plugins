@@ -1,0 +1,35 @@
+{
+  "description": "Run MeTube — a yt-dlp web UI — in Docker on the remote, bound to loopback 127.0.0.1:8081 (reached only over the SSH tunnel). Paste a video/playlist URL in the web UI and yt-dlp downloads it on the server into ~/yt-dlp-downloads, merged to mp4. Inspired by a Docker yt-dlp setup.",
+  "steps": [
+    {
+      "id": "docker",
+      "description": "Install Docker if it isn't already (official get.docker.com script). Skipped if docker is present.",
+      "check": "command -v docker",
+      "run": "curl -fsSL https://get.docker.com -o /tmp/get-docker.sh && sudo sh /tmp/get-docker.sh && { sudo usermod -aG docker $USER || true; }",
+      "sudo": true,
+      "stream": true,
+      "timeoutMs": 600000
+    },
+    {
+      "id": "run",
+      "description": "Start the MeTube container: web UI on 127.0.0.1:8081, downloads in ~/yt-dlp-downloads, merged to mp4.",
+      "check": "docker ps --filter name=metube --filter status=running -q | grep -q .",
+      "run": "mkdir -p ~/yt-dlp-downloads; docker rm -f metube 2>/dev/null || true; docker run -d --name metube --restart unless-stopped -p 127.0.0.1:8081:8081 -v ~/yt-dlp-downloads:/downloads -e PUID=$(id -u) -e PGID=$(id -g) -e YTDL_OPTIONS='{\"merge_output_format\":\"mp4\"}' ghcr.io/alexta69/metube",
+      "sudo": true,
+      "stream": true,
+      "timeoutMs": 600000,
+      "forwardPort": 8081
+    },
+    {
+      "id": "wait",
+      "description": "Wait for MeTube to finish starting.",
+      "check": "curl -fsS http://127.0.0.1:8081/ >/dev/null 2>&1",
+      "run": "for i in $(seq 1 60); do curl -fsS http://127.0.0.1:8081/ >/dev/null 2>&1 && exit 0; sleep 2; done; echo 'MeTube is still starting — give it a moment, then open it.'",
+      "continueOnError": true,
+      "timeoutMs": 150000
+    }
+  ],
+  "uninstall": [
+    { "id": "remove", "description": "Stop and remove the MeTube container. Your downloads in ~/yt-dlp-downloads are kept.", "run": "docker rm -f metube 2>/dev/null || true", "sudo": true, "continueOnError": true }
+  ]
+}

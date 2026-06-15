@@ -1,0 +1,17 @@
+{
+  "id": "io.github.mobilessh.openwebui",
+  "name": "Open WebUI",
+  "description": "Full chat web UI for Ollama (Open WebUI) on the remote — open it in-app or in your phone's browser. Reuses your existing Ollama models.",
+  "version": "1.0.0",
+  "minBridgeVersion": "1.0.0",
+  "category": "llm",
+  "icon": "icon.svg",
+  "author": "Mobile SSH",
+  "homepage": "https://github.com/open-webui/open-webui",
+  "capabilities": ["SSH_EXEC", "TUNNEL"],
+  "sessionRequirement": "REQUIRES_ACTIVE_SESSION",
+  "ui": { "entry": "ui/index.html" },
+  "recipe": "recipe.json",
+  "tunnel": { "port": 3000 },
+  "serviceUrl": "{tunnelUrl}/"
+}

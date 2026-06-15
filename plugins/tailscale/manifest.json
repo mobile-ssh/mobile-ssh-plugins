@@ -1,0 +1,14 @@
+{
+  "id": "io.github.mobilessh.tailscale",
+  "name": "Tailscale",
+  "description": "Install Tailscale on the remote and join it to your tailnet. Enables the tailscale-serve tunnel backend (real HTTPS) for other plugins.",
+  "version": "1.0.0",
+  "minBridgeVersion": "1.0.0",
+  "category": "connectivity",
+  "icon": "icon.svg",
+  "author": "Mobile SSH",
+  "capabilities": ["SSH_EXEC"],
+  "sessionRequirement": "REQUIRES_ACTIVE_SESSION",
+  "ui": { "entry": "ui/index.html" },
+  "recipe": "recipe.json"
+}

@@ -1,0 +1,17 @@
+{
+  "id": "io.github.mobilessh.ytdlp",
+  "name": "yt-dlp (MeTube)",
+  "description": "Download videos with yt-dlp from a web UI (MeTube) on the remote — open it in-app or in your phone's browser. Paste a URL; files save on the server.",
+  "version": "1.0.0",
+  "minBridgeVersion": "1.0.0",
+  "category": "other",
+  "icon": "icon.svg",
+  "author": "Mobile SSH",
+  "homepage": "https://github.com/alexta69/metube",
+  "capabilities": ["SSH_EXEC", "TUNNEL"],
+  "sessionRequirement": "REQUIRES_ACTIVE_SESSION",
+  "ui": { "entry": "ui/index.html" },
+  "recipe": "recipe.json",
+  "tunnel": { "port": 8081 },
+  "serviceUrl": "{tunnelUrl}/"
+}

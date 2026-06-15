@@ -1,0 +1,255 @@
+{
+  "schema": 1,
+  "updated": "1970-01-01T00:00:00Z",
+  "plugins": [
+    {
+      "id": "io.github.mobilessh.tailscale",
+      "name": "Tailscale",
+      "description": "Install Tailscale on the remote and join it to your tailnet. Enables the tailscale-serve tunnel backend (real HTTPS) for other plugins.",
+      "version": "1.0.0",
+      "minBridgeVersion": "1.0.0",
+      "role": "connectivity",
+      "icon": "plugins/tailscale/icon.svg",
+      "capabilities": [
+        "SSH_EXEC"
+      ],
+      "sessionRequirement": "REQUIRES_ACTIVE_SESSION",
+      "path": "plugins/tailscale",
+      "files": [
+        {
+          "path": "icon.svg",
+          "sha256": "29e01b3d4982a6fb3e5b76b69037375f0d6589bc7a6d9e984357e29a0ab95fab"
+        },
+        {
+          "path": "manifest.json",
+          "sha256": "39699924e85270db5b28f387490da5f62e46e8573fb7edc0fde2333373967dac"
+        },
+        {
+          "path": "recipe.json",
+          "sha256": "b8fbe63c7331a21e0e3dd39b808c22c61a7e3a0c90799f9c1e9227832a25a838"
+        },
+        {
+          "path": "ui/app.js",
+          "sha256": "be224715db06080de46308b71b4675362f0006134fba4c7239a5065f253b7f64"
+        },
+        {
+          "path": "ui/i18n.js",
+          "sha256": "81e26ca00d7ce1d7658f14a929090d60953361c280c384bfd871d3b01cf406ac"
+        },
+        {
+          "path": "ui/index.html",
+          "sha256": "82a61c3805c70c9f63bc7e87ad3de74e0f3ad2a2e493650c0927f65248cfd44a"
+        }
+      ]
+    },
+    {
+      "id": "io.github.mobilessh.wireguard",
+      "name": "WireGuard (wg-easy)",
+      "description": "Install the wg-easy WireGuard server on the remote via Docker and manage clients/QR codes from the phone.",
+      "version": "1.0.0",
+      "minBridgeVersion": "1.0.0",
+      "role": "connectivity",
+      "icon": "plugins/wireguard/icon.svg",
+      "capabilities": [
+        "SSH_EXEC",
+        "TUNNEL"
+      ],
+      "sessionRequirement": "REQUIRES_ACTIVE_SESSION",
+      "path": "plugins/wireguard",
+      "files": [
+        {
+          "path": "icon.svg",
+          "sha256": "cd8b35255fd77f345d46986a6c58ddd979a3a209e16ba9a67c4b81dc08efa524"
+        },
+        {
+          "path": "manifest.json",
+          "sha256": "93a62902175ff1c97017ab2142b123805b62bb833858062314203ad18202ea7d"
+        },
+        {
+          "path": "recipe.json",
+          "sha256": "05e9cec097a99a3143edde63e91358783bbb67168f102f7f66cc09b44ae215a2"
+        },
+        {
+          "path": "ui/app.js",
+          "sha256": "467f5234c4d55ee51aa9dd51260e3778d085cc2d34cd30dde8481a1e357310d7"
+        },
+        {
+          "path": "ui/i18n.js",
+          "sha256": "3aa557b4f9c15c7a42aa0027fbf9676ecb5405114c073a7bc32b0c8ab8ef09b4"
+        },
+        {
+          "path": "ui/index.html",
+          "sha256": "b30f3fa1e46824892c42faca903965ef2246ce474ab17a9c3b96c07d81a3d3fb"
+        }
+      ]
+    },
+    {
+      "id": "io.github.mobilessh.vscode",
+      "name": "VS Code",
+      "description": "Run VS Code (code-server) on the remote host and open it on your phone. Run agents in its terminal.",
+      "version": "1.0.0",
+      "minBridgeVersion": "1.0.0",
+      "role": "ide",
+      "icon": "plugins/vscode/icon.svg",
+      "capabilities": [
+        "SSH_EXEC",
+        "TUNNEL",
+        "HTTP_LOOPBACK",
+        "STORAGE"
+      ],
+      "sessionRequirement": "REQUIRES_ACTIVE_SESSION",
+      "path": "plugins/vscode",
+      "files": [
+        {
+          "path": "icon.svg",
+          "sha256": "4dd6f670812d65ec640eab1f95d6f085b0d27b8c976be1008487468763748517"
+        },
+        {
+          "path": "manifest.json",
+          "sha256": "247bccbb54da24f775b03ff218497af900e14515f29b8ed811a9d9d339f58108"
+        },
+        {
+          "path": "recipe.json",
+          "sha256": "c9a58e8a6127bde268a265d793195f6fc4900252bcdd83dfd8a439096b4c2a90"
+        },
+        {
+          "path": "ui/app.js",
+          "sha256": "af6ae5ad12593172cf2e4f5ed0690a8b7b253966cbd798a0cadcf9ccec7bc684"
+        },
+        {
+          "path": "ui/i18n.js",
+          "sha256": "0d3e0aa8413712f4b7cd4e720c12d197db30ec99aa3fffcd8a9db5a98ed00e71"
+        },
+        {
+          "path": "ui/index.html",
+          "sha256": "67af50877e96ec616de1f65b88510bc19b606e4cdb574f3337c0b91d603ee481"
+        }
+      ]
+    },
+    {
+      "id": "io.github.mobilessh.aichat",
+      "name": "AI Chat",
+      "description": "Chat with a model running on the remote (Ollama) over a port forward — tokens stream live.",
+      "version": "1.0.0",
+      "minBridgeVersion": "1.0.0",
+      "role": "llm",
+      "icon": "plugins/aichat/icon.svg",
+      "capabilities": [
+        "SSH_EXEC",
+        "TUNNEL",
+        "HTTP_LOOPBACK",
+        "STORAGE"
+      ],
+      "sessionRequirement": "REQUIRES_ACTIVE_SESSION",
+      "path": "plugins/aichat",
+      "files": [
+        {
+          "path": "icon.svg",
+          "sha256": "2c0ed284dab8c0e7437b4014921eedca5883a3e09f61e4361e713361004290fa"
+        },
+        {
+          "path": "manifest.json",
+          "sha256": "b9491a9c00d7c64cb8a09ccecc4546fb4088a96aeb03fd8f67f43fd3d75040c9"
+        },
+        {
+          "path": "recipe.json",
+          "sha256": "d31ebacde2ea95466f7b9966f52220c92e3fa745ee7512f57bd415468634edb4"
+        },
+        {
+          "path": "ui/app.js",
+          "sha256": "afc9ba37d3cea2dac6a7768d26287f28d5b4a426ce8b42b4a6c47bc146155300"
+        },
+        {
+          "path": "ui/i18n.js",
+          "sha256": "ef5220218643bc35f1a087229885cd841a7e3b6e606d3faa89d65600cee33198"
+        },
+        {
+          "path": "ui/index.html",
+          "sha256": "06d00e8db4a4ffbf47005767161c89a5d337fd64df9a3f1d4e160d0154c0f478"
+        }
+      ]
+    },
+    {
+      "id": "io.github.mobilessh.openwebui",
+      "name": "Open WebUI",
+      "description": "Full chat web UI for Ollama (Open WebUI) on the remote — open it in-app or in your phone's browser. Reuses your existing Ollama models.",
+      "version": "1.0.0",
+      "minBridgeVersion": "1.0.0",
+      "role": "llm",
+      "icon": "plugins/openwebui/icon.svg",
+      "capabilities": [
+        "SSH_EXEC",
+        "TUNNEL"
+      ],
+      "sessionRequirement": "REQUIRES_ACTIVE_SESSION",
+      "path": "plugins/openwebui",
+      "files": [
+        {
+          "path": "icon.svg",
+          "sha256": "e1e42bfdda011aca2387c9af799a43389882e4a7bcd76515dde7e278b61e3a79"
+        },
+        {
+          "path": "manifest.json",
+          "sha256": "a4c7311f88df088954f25e336962441551c4670b398b9be24e530225a3462e06"
+        },
+        {
+          "path": "recipe.json",
+          "sha256": "433893d1b94a53393d9893dadb071a7a55b220b1b834cbcd341b9653c5b23fdb"
+        },
+        {
+          "path": "ui/app.js",
+          "sha256": "e252c5c4908e65e8eda4688dd4e99d7b9ea7daf88256c7413a5f5be9b0c28eae"
+        },
+        {
+          "path": "ui/i18n.js",
+          "sha256": "d42e964b6ab1f420185dd301a07e4daf3ecda4c721437a4f14804565f21458db"
+        },
+        {
+          "path": "ui/index.html",
+          "sha256": "4150d31a4135f6211399153d4e7657493a58403922461b2d023e3552cce3a17d"
+        }
+      ]
+    },
+    {
+      "id": "io.github.mobilessh.ytdlp",
+      "name": "yt-dlp (MeTube)",
+      "description": "Download videos with yt-dlp from a web UI (MeTube) on the remote — open it in-app or in your phone's browser. Paste a URL; files save on the server.",
+      "version": "1.0.0",
+      "minBridgeVersion": "1.0.0",
+      "role": "other",
+      "icon": "plugins/ytdlp/icon.svg",
+      "capabilities": [
+        "SSH_EXEC",
+        "TUNNEL"
+      ],
+      "sessionRequirement": "REQUIRES_ACTIVE_SESSION",
+      "path": "plugins/ytdlp",
+      "files": [
+        {
+          "path": "icon.svg",
+          "sha256": "a5aa3cd1e222219173768cf188a8a06ede76c296649b10322f430260c9fe980c"
+        },
+        {
+          "path": "manifest.json",
+          "sha256": "ecdd83dc9574f66eccbeeba897db39a8b6f06758200f7fdf505f755db9eb9776"
+        },
+        {
+          "path": "recipe.json",
+          "sha256": "a713024a76a55b725dd1fad56b4105698cefb416236b55b6596ee1a402943494"
+        },
+        {
+          "path": "ui/app.js",
+          "sha256": "26e64003264e9bdf5982cfb8ba0aaa53d1f0b6d3f7597cf28dd6a0b028a37a41"
+        },
+        {
+          "path": "ui/i18n.js",
+          "sha256": "5d342d3c20fdecb012eaa7f4c62d2cc11b53699f031e0a481eb3b8285bce0362"
+        },
+        {
+          "path": "ui/index.html",
+          "sha256": "50cab8c71ac5dbad25e153b7d9651aec64718eb594a76851f6c0e72c5cef7e20"
+        }
+      ]
+    }
+  ]
+}

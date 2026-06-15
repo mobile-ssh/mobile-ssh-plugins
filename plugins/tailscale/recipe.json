@@ -1,0 +1,23 @@
+{
+  "description": "Install Tailscale and bring it up. Captures the browser login URL so you can authenticate the server.",
+  "steps": [
+    {
+      "id": "install",
+      "description": "Install Tailscale using the official script (only if not already installed).",
+      "check": "command -v tailscale",
+      "run": "curl -fsSL https://tailscale.com/install.sh | sh",
+      "sudo": true,
+      "stream": true,
+      "timeoutMs": 600000
+    },
+    {
+      "id": "up",
+      "description": "Bring Tailscale up (runs in the background) and print the login URL if authentication is needed.",
+      "run": "sudo sh -c 'nohup tailscale up >/tmp/ts-up.log 2>&1 & sleep 4; cat /tmp/ts-up.log; true'",
+      "capture": { "authUrl": "(https://login\\.tailscale\\.com/[^\\s]+)" }
+    }
+  ],
+  "uninstall": [
+    { "id": "logout", "description": "Log this server out of your tailnet and stop it.", "run": "sudo tailscale logout 2>/dev/null || true; sudo tailscale down 2>/dev/null || true", "sudo": true, "continueOnError": true }
+  ]
+}

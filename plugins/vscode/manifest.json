@@ -1,0 +1,16 @@
+{
+  "id": "io.github.mobilessh.vscode",
+  "name": "VS Code",
+  "description": "Run VS Code (code-server) on the remote host and open it on your phone. Run agents in its terminal.",
+  "version": "1.0.0",
+  "minBridgeVersion": "1.0.0",
+  "category": "ide",
+  "icon": "icon.svg",
+  "author": "Mobile SSH",
+  "capabilities": ["SSH_EXEC", "TUNNEL", "HTTP_LOOPBACK", "STORAGE"],
+  "sessionRequirement": "REQUIRES_ACTIVE_SESSION",
+  "ui": { "entry": "ui/index.html" },
+  "recipe": "recipe.json",
+  "tunnel": { "port": 8080 },
+  "serviceUrl": "{tunnelUrl}/"
+}

@@ -1,0 +1,16 @@
+{
+  "id": "io.github.mobilessh.wireguard",
+  "name": "WireGuard (wg-easy)",
+  "description": "Install the wg-easy WireGuard server on the remote via Docker and manage clients/QR codes from the phone.",
+  "version": "1.0.0",
+  "minBridgeVersion": "1.0.0",
+  "category": "connectivity",
+  "icon": "icon.svg",
+  "author": "Mobile SSH",
+  "capabilities": ["SSH_EXEC", "TUNNEL"],
+  "sessionRequirement": "REQUIRES_ACTIVE_SESSION",
+  "ui": { "entry": "ui/index.html" },
+  "recipe": "recipe.json",
+  "tunnel": { "port": 51821 },
+  "serviceUrl": "{tunnelUrl}/"
+}

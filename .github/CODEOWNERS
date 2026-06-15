@@ -1,0 +1,4 @@
+# The bridge contract and schemas are the stable interface — maintainer review required.
+/sdk/      @mobile-ssh/maintainers
+/schema/   @mobile-ssh/maintainers
+/tools/    @mobile-ssh/maintainers

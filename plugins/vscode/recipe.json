@@ -1,0 +1,31 @@
+{
+  "description": "Install and launch code-server (VS Code in the browser) bound to loopback with a password.",
+  "steps": [
+    {
+      "id": "install",
+      "description": "Install code-server using the official script (only if not already installed).",
+      "check": "command -v code-server",
+      "run": "curl -fsSL https://code-server.dev/install.sh | sh",
+      "sudo": true,
+      "stream": true,
+      "timeoutMs": 600000
+    },
+    {
+      "id": "configure",
+      "description": "Write code-server config: bind to 127.0.0.1:8080 with a password (reached only over the tunnel).",
+      "run": "mkdir -p ~/.config/code-server && printf 'bind-addr: 127.0.0.1:8080\\nauth: password\\npassword: %s\\ncert: false\\n' '{{password}}' > ~/.config/code-server/config.yaml && chmod 600 ~/.config/code-server/config.yaml"
+    },
+    {
+      "id": "start",
+      "description": "Start code-server in the background.",
+      "check": "curl -fsS http://127.0.0.1:8080/healthz >/dev/null 2>&1",
+      "run": "nohup code-server >/tmp/code-server.log 2>&1 &",
+      "forwardPort": 8080
+    }
+  ],
+  "uninstall": [
+    { "id": "stop", "description": "Stop code-server.", "run": "pkill -f code-server || true", "continueOnError": true },
+    { "id": "remove-data", "description": "Remove code-server config, settings and extensions.", "run": "rm -rf ~/.config/code-server ~/.local/share/code-server" },
+    { "id": "remove-binary", "description": "Uninstall the code-server binary.", "run": "sudo rm -rf /usr/lib/code-server /usr/bin/code-server", "sudo": true, "continueOnError": true }
+  ]
+}

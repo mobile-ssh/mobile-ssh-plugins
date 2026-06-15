@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Template Plugin</title>
+  <style>
+    :root { --accent:#2196F3; --bg:#1a1a2e; --surface:#23233a; --text:#eee; }
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    body { margin:0; font:16px/1.4 system-ui,sans-serif; background:var(--bg); color:var(--text);
+           padding:16px; padding-bottom:max(16px, env(safe-area-inset-bottom)); }
+    h1 { font-size:18px; margin:0 0 12px; }
+    button { width:100%; padding:14px; margin:6px 0; border:0; border-radius:10px;
+             background:var(--accent); color:#fff; font-size:16px; }
+    button.secondary { background:var(--surface); color:var(--text); }
+    pre { background:var(--surface); padding:10px; border-radius:8px; white-space:pre-wrap;
+          word-break:break-word; font-size:13px; max-height:40vh; overflow:auto; }
+    .row { display:flex; gap:8px; }
+  </style>
+</head>
+<body>
+  <h1 id="title">Template Plugin</h1>
+  <div class="row">
+    <button id="install">Run recipe</button>
+    <button id="open" class="secondary">Open service</button>
+  </div>
+  <button id="ping" class="secondary">HTTP ping</button>
+  <pre id="log">Ready.</pre>
+  <!-- During in-app run, the host injects window.MobileSSH before this loads.
+       For local dev you can stub window.__MobileSSHNative and include ../../sdk/mobilessh.js. -->
+  <script src="app.js"></script>
+</body>
+</html>

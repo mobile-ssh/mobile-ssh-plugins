@@ -1,0 +1,34 @@
+{
+  "description": "Ensure Ollama is installed and running on the remote and the chosen model is pulled.",
+  "steps": [
+    {
+      "id": "install",
+      "description": "Install Ollama using the official script (only if not already installed).",
+      "check": "command -v ollama",
+      "run": "curl -fsSL https://ollama.com/install.sh | sh",
+      "sudo": true,
+      "stream": true,
+      "timeoutMs": 600000
+    },
+    {
+      "id": "serve",
+      "description": "Start the Ollama server (binds to 127.0.0.1:11434).",
+      "check": "curl -fsS http://127.0.0.1:11434/api/tags >/dev/null 2>&1",
+      "run": "nohup ollama serve >/tmp/ollama.log 2>&1 &",
+      "forwardPort": 11434
+    },
+    {
+      "id": "pull",
+      "description": "Download the chosen model (skipped if already present).",
+      "check": "ollama list | grep -q '{{model}}'",
+      "run": "ollama pull {{model}}",
+      "stream": true,
+      "timeoutMs": 1800000
+    }
+  ],
+  "uninstall": [
+    { "id": "stop", "description": "Stop the Ollama service.", "run": "sudo systemctl disable --now ollama 2>/dev/null || pkill -f 'ollama serve' || true", "sudo": true, "continueOnError": true },
+    { "id": "remove-models", "description": "Remove downloaded models and data (can be several GB).", "run": "rm -rf ~/.ollama; sudo rm -rf /usr/share/ollama/.ollama 2>/dev/null || true", "sudo": true, "continueOnError": true },
+    { "id": "remove-binary", "description": "Uninstall the Ollama binary, service and user.", "run": "sudo rm -f /usr/local/bin/ollama /etc/systemd/system/ollama.service; sudo userdel ollama 2>/dev/null || true", "sudo": true, "continueOnError": true }
+  ]
+}

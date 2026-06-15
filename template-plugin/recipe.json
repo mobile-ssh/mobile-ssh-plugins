@@ -1,0 +1,18 @@
+{
+  "description": "Example: start a trivial HTTP server on the remote and confirm it is up.",
+  "steps": [
+    {
+      "id": "start-server",
+      "description": "Start a one-shot HTTP server on port 8000 (replace with your real service).",
+      "check": "curl -fsS http://127.0.0.1:8000/ >/dev/null 2>&1",
+      "run": "nohup python3 -m http.server 8000 --bind 127.0.0.1 >/tmp/template.log 2>&1 &",
+      "forwardPort": 8000
+    },
+    {
+      "id": "whoami",
+      "description": "Capture the remote username to show in the UI.",
+      "run": "whoami",
+      "capture": { "user": "(.+)" }
+    }
+  ]
+}

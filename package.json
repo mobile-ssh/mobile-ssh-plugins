@@ -1,0 +1,17 @@
+{
+  "name": "mobile-ssh-plugins",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Open-source plugin ecosystem for the Mobile SSH apps (iOS and Android)",
+  "scripts": {
+    "validate": "node tools/validate.mjs",
+    "build-catalog": "node tools/build-catalog.mjs",
+    "check": "node tools/build-catalog.mjs && node tools/validate.mjs"
+  },
+  "devDependencies": {
+    "ajv": "^8.17.1",
+    "ajv-formats": "^3.0.1"
+  },
+  "license": "MIT"
+}
