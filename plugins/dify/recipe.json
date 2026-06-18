@@ -1,0 +1,55 @@
+{
+  "description": "Clone the Dify repo and start its Docker Compose stack with a loopback-only override (nginx published on 127.0.0.1:8088 instead of 0.0.0.0:80). In Dify Settings → Model Provider, add Ollama with base URL http://host.docker.internal:11434. This pulls several multi-GB images.",
+  "requires": [
+    "docker"
+  ],
+  "steps": [
+    {
+      "id": "check-docker",
+      "description": "Verify Docker + Compose are installed.",
+      "run": "docker --version && docker compose version"
+    },
+    {
+      "id": "ollama",
+      "description": "Make sure the AI Chat plugin's Ollama is running on 127.0.0.1:11434 (start it if installed). Install the AI Chat plugin first if this reports it missing.",
+      "check": "curl -fsS http://127.0.0.1:11434/api/version >/dev/null 2>&1",
+      "run": "export PATH=\"$HOME/.local/bin:$PATH\"; if command -v ollama >/dev/null 2>&1; then export OLLAMA_HOST=127.0.0.1:11434; nohup ollama serve >/tmp/ollama.log 2>&1 & for i in $(seq 1 20); do curl -fsS http://127.0.0.1:11434/api/version >/dev/null 2>&1 && exit 0; sleep 1; done; fi; echo \"Ollama not reachable on 127.0.0.1:11434 — install/run the AI Chat plugin first (it sets up Ollama with no root).\"",
+      "continueOnError": true,
+      "timeoutMs": 40000
+    },
+    {
+      "id": "clone",
+      "description": "Clone the Dify repository (shallow) into ~/.mobilessh/dify.",
+      "check": "test -f \"$HOME/.mobilessh/dify/dify/docker/docker-compose.yaml\"",
+      "run": "mkdir -p \"$HOME/.mobilessh/dify\"; cd \"$HOME/.mobilessh/dify\"; test -d dify || git clone --depth 1 https://github.com/langgenius/dify.git",
+      "stream": true,
+      "timeoutMs": 600000
+    },
+    {
+      "id": "config",
+      "description": "Create .env and a docker-compose.override.yaml that (a) rebinds nginx to loopback 127.0.0.1:8088 only (ports: !override — requires Docker Compose v2.24.4+) and (b) gives the api/worker containers host-gateway access so they can reach the host Ollama. Re-run safe.",
+      "run": "cd \"$HOME/.mobilessh/dify/dify/docker\"; cp -n .env.example .env; cat > docker-compose.override.yaml <<'YML'\nservices:\n  nginx:\n    ports: !override\n      - \"127.0.0.1:8088:80\"\n  api:\n    extra_hosts:\n      - \"host.docker.internal:host-gateway\"\n  worker:\n    extra_hosts:\n      - \"host.docker.internal:host-gateway\"\nYML",
+      "check": "f=\"$HOME/.mobilessh/dify/dify/docker/docker-compose.override.yaml\"; test -f \"$f\" && grep -q 127.0.0.1:8088 \"$f\" && grep -q host-gateway \"$f\""
+    },
+    {
+      "id": "up",
+      "description": "Start the Dify stack (downloads several images on first run).",
+      "check": "curl -fsS http://127.0.0.1:8088/ >/dev/null 2>&1",
+      "run": "cd \"$(eval echo ~\"${SUDO_USER:-$USER}\")/.mobilessh/dify/dify/docker\"; docker compose up -d; for i in $(seq 1 90); do curl -fsS http://127.0.0.1:8088/ >/dev/null 2>&1 && exit 0; sleep 2; done; echo \"Dify still starting — give it a minute, then open it and create the admin account at /install.\"",
+      "sudo": true,
+      "stream": true,
+      "continueOnError": true,
+      "timeoutMs": 1800000,
+      "forwardPort": 8088
+    }
+  ],
+  "uninstall": [
+    {
+      "id": "down",
+      "description": "Stop and remove the Dify stack and its volumes (accounts, apps, data).",
+      "run": "cd \"$(eval echo ~\"${SUDO_USER:-$USER}\")/.mobilessh/dify/dify/docker\" 2>/dev/null && docker compose down -v 2>/dev/null || true",
+      "sudo": true,
+      "continueOnError": true
+    }
+  ]
+}

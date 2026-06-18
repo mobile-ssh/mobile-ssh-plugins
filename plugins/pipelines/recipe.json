@@ -1,0 +1,66 @@
+{
+  "description": "Run the Open WebUI Pipelines server in Docker bound to loopback 127.0.0.1:9099. It exposes an OpenAI-compatible API. Drop your LangChain/LlamaIndex pipeline .py files into ~/.mobilessh/pipelines to expose them as models; they reach the host Ollama via http://host.docker.internal:11434.",
+  "requires": [
+    "docker"
+  ],
+  "steps": [
+    {
+      "id": "check-docker",
+      "description": "Verify Docker is installed.",
+      "run": "docker --version"
+    },
+    {
+      "id": "ollama",
+      "description": "Make sure the AI Chat plugin's Ollama is running on 127.0.0.1:11434 (start it if installed). Install the AI Chat plugin first if this reports it missing.",
+      "check": "curl -fsS http://127.0.0.1:11434/api/version >/dev/null 2>&1",
+      "run": "export PATH=\"$HOME/.local/bin:$PATH\"; if command -v ollama >/dev/null 2>&1; then export OLLAMA_HOST=127.0.0.1:11434; nohup ollama serve >/tmp/ollama.log 2>&1 & for i in $(seq 1 20); do curl -fsS http://127.0.0.1:11434/api/version >/dev/null 2>&1 && exit 0; sleep 1; done; fi; echo \"Ollama not reachable on 127.0.0.1:11434 — install/run the AI Chat plugin first (it sets up Ollama with no root).\"",
+      "continueOnError": true,
+      "timeoutMs": 40000
+    },
+    {
+      "id": "models",
+      "description": "Pull the model used by the bundled example pipeline (llama3.2) with Ollama.",
+      "check": "export PATH=\"$HOME/.local/bin:$PATH\"; ollama list 2>/dev/null | grep -qF 'llama3.2'",
+      "run": "export PATH=\"$HOME/.local/bin:$PATH\"; command -v ollama >/dev/null 2>&1 && ollama pull llama3.2 || echo \"Ollama CLI not found — install the AI Chat plugin first.\"",
+      "stream": true,
+      "continueOnError": true,
+      "timeoutMs": 1800000
+    },
+    {
+      "id": "run",
+      "description": "Start the Open WebUI Pipelines container bound to loopback 127.0.0.1:9099 (pipeline files in the Docker volume \"pipelines\").",
+      "check": "docker ps --filter name=^/pipelines$ --filter status=running -q | grep -q .",
+      "run": "docker rm -f pipelines 2>/dev/null || true; docker run -d --name pipelines --restart unless-stopped -p 127.0.0.1:9099:9099 --add-host=host.docker.internal:host-gateway -v pipelines:/app/pipelines ghcr.io/open-webui/pipelines:main",
+      "sudo": true,
+      "stream": true,
+      "timeoutMs": 900000,
+      "forwardPort": 9099
+    },
+    {
+      "id": "example",
+      "description": "Install a bundled example pipeline (LangChain → local Ollama, exposed as an OpenAI model) into the Pipelines server and reload it.",
+      "check": "docker exec pipelines test -f /app/pipelines/langchain_ollama_pipe.py 2>/dev/null",
+      "run": "cat > /tmp/mobilessh-langchain-pipe.py <<'PYEOF'\n\"\"\"\ntitle: LangChain Ollama Pipeline\nauthor: mobile-ssh\nversion: 1.0\nlicense: MIT\ndescription: Runs a local Ollama model via LangChain (ChatOllama) and exposes it as an OpenAI-compatible model.\nrequirements: langchain-ollama, langchain-core\n\"\"\"\nfrom typing import List, Union, Generator, Iterator\nfrom pydantic import BaseModel\n\n\nclass Pipeline:\n    class Valves(BaseModel):\n        # Reachable from inside the Pipelines container to Ollama on the host.\n        OLLAMA_BASE_URL: str = \"http://host.docker.internal:11434\"\n        MODEL: str = \"llama3.2\"\n        TEMPERATURE: float = 0.7\n\n    def __init__(self):\n        self.name = \"LangChain Ollama\"\n        self.valves = self.Valves()\n        self.llm = None\n\n    async def on_startup(self):\n        from langchain_ollama import ChatOllama\n        self.llm = ChatOllama(\n            base_url=self.valves.OLLAMA_BASE_URL,\n            model=self.valves.MODEL,\n            temperature=self.valves.TEMPERATURE,\n        )\n\n    async def on_shutdown(self):\n        self.llm = None\n\n    def _to_lc_messages(self, messages, user_message):\n        from langchain_core.messages import SystemMessage, HumanMessage, AIMessage\n        lc = []\n        for m in messages or []:\n            role = m.get(\"role\")\n            content = m.get(\"content\", \"\")\n            if role == \"system\":\n                lc.append(SystemMessage(content=content))\n            elif role == \"assistant\":\n                lc.append(AIMessage(content=content))\n            else:\n                lc.append(HumanMessage(content=content))\n        if not lc:\n            lc.append(HumanMessage(content=user_message))\n        return lc\n\n    def pipe(self, user_message: str, model_id: str, messages: List[dict], body: dict) -> Union[str, Generator, Iterator]:\n        lc_messages = self._to_lc_messages(messages, user_message)\n        try:\n            if body.get(\"stream\", False):\n                def gen():\n                    for chunk in self.llm.stream(lc_messages):\n                        if chunk.content:\n                            yield chunk.content\n                return gen()\n            return self.llm.invoke(lc_messages).content\n        except Exception as e:\n            return f\"Error: {e}\"\nPYEOF\ndocker cp /tmp/mobilessh-langchain-pipe.py pipelines:/app/pipelines/langchain_ollama_pipe.py && docker restart pipelines",
+      "sudo": true,
+      "stream": true,
+      "timeoutMs": 300000
+    },
+    {
+      "id": "wait",
+      "description": "Wait for the Pipelines server to answer.",
+      "check": "curl -fsS -H \"Authorization: Bearer 0p3n-w3bu!\" http://127.0.0.1:9099/v1/models >/dev/null 2>&1",
+      "run": "for i in $(seq 1 60); do curl -fsS -H \"Authorization: Bearer 0p3n-w3bu!\" http://127.0.0.1:9099/v1/models >/dev/null 2>&1 && exit 0; sleep 2; done; echo \"Pipelines still starting — give it a moment.\"",
+      "continueOnError": true,
+      "timeoutMs": 150000
+    }
+  ],
+  "uninstall": [
+    {
+      "id": "remove",
+      "description": "Stop and remove the Pipelines container and its pipeline volume.",
+      "run": "docker rm -f pipelines 2>/dev/null || true; docker volume rm pipelines 2>/dev/null || true",
+      "sudo": true,
+      "continueOnError": true
+    }
+  ]
+}

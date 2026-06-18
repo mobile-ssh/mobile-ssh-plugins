@@ -1,34 +1,33 @@
 {
-  "description": "Ensure Ollama is installed and running on the remote and the chosen model is pulled.",
+  "description": "Install Ollama into your home directory (no root) and run it as a user process bound to 127.0.0.1:11434, then pull the chosen model. Nothing is installed system-wide and no sudo is used. The Open WebUI plugin reuses this same Ollama and its models automatically.",
   "steps": [
     {
       "id": "install",
-      "description": "Install Ollama using the official script (only if not already installed).",
-      "check": "command -v ollama",
-      "run": "curl -fsSL https://ollama.com/install.sh | sh",
-      "sudo": true,
+      "description": "Download the standalone Ollama binary into ~/.local (no root, no systemd; recent builds ship as .tar.zst and need the 'zstd' unpack tool). Skipped if Ollama is already installed.",
+      "check": "command -v ollama >/dev/null 2>&1 || [ -x \"$HOME/.local/bin/ollama\" ]",
+      "run": "set -e; mkdir -p \"$HOME/.local\"; case \"$(uname -m)\" in x86_64|amd64) A=amd64 ;; aarch64|arm64) A=arm64 ;; *) echo \"Unsupported architecture: $(uname -m)\" >&2; exit 1 ;; esac; command -v zstd >/dev/null 2>&1 || { echo \"Ollama ships as a .tar.zst archive and needs the 'zstd' tool to unpack. Install zstd (e.g. apt-get install zstd / dnf install zstd) and retry.\" >&2; exit 1; }; echo \"Downloading Ollama ($A) into ~/.local ...\"; TMP=$(mktemp); curl -fsSL \"https://ollama.com/download/ollama-linux-$A.tar.zst\" -o \"$TMP\"; zstd -dc \"$TMP\" | tar -xf - -C \"$HOME/.local\"; rm -f \"$TMP\"; \"$HOME/.local/bin/ollama\" --version || { echo \"Ollama installed but failed to run — your server's glibc may be too old (needs GLIBC 2.28+, e.g. Ubuntu 20.04+ / RHEL 8+).\" >&2; exit 1; }",
       "stream": true,
       "timeoutMs": 600000
     },
     {
       "id": "serve",
-      "description": "Start the Ollama server (binds to 127.0.0.1:11434).",
+      "description": "Start the Ollama server as a user process (binds to 127.0.0.1:11434) and wait until it answers.",
       "check": "curl -fsS http://127.0.0.1:11434/api/tags >/dev/null 2>&1",
-      "run": "nohup ollama serve >/tmp/ollama.log 2>&1 &",
+      "run": "export PATH=\"$HOME/.local/bin:$PATH\"; export OLLAMA_HOST=127.0.0.1:11434; mkdir -p \"$HOME/.local\"; nohup ollama serve >\"$HOME/.local/ollama.log\" 2>&1 & for i in $(seq 1 30); do curl -fsS http://127.0.0.1:11434/api/tags >/dev/null 2>&1 && exit 0; sleep 1; done; echo 'Ollama did not become ready; last log lines:' >&2; tail -n 20 \"$HOME/.local/ollama.log\" >&2 2>/dev/null || true; exit 1",
+      "timeoutMs": 60000,
       "forwardPort": 11434
     },
     {
       "id": "pull",
       "description": "Download the chosen model (skipped if already present).",
-      "check": "ollama list | grep -q '{{model}}'",
-      "run": "ollama pull {{model}}",
+      "check": "export PATH=\"$HOME/.local/bin:$PATH\"; ollama list 2>/dev/null | grep -qF '{{model}}'",
+      "run": "export PATH=\"$HOME/.local/bin:$PATH\"; ollama pull {{model}}",
       "stream": true,
       "timeoutMs": 1800000
     }
   ],
   "uninstall": [
-    { "id": "stop", "description": "Stop the Ollama service.", "run": "sudo systemctl disable --now ollama 2>/dev/null || pkill -f 'ollama serve' || true", "sudo": true, "continueOnError": true },
-    { "id": "remove-models", "description": "Remove downloaded models and data (can be several GB).", "run": "rm -rf ~/.ollama; sudo rm -rf /usr/share/ollama/.ollama 2>/dev/null || true", "sudo": true, "continueOnError": true },
-    { "id": "remove-binary", "description": "Uninstall the Ollama binary, service and user.", "run": "sudo rm -f /usr/local/bin/ollama /etc/systemd/system/ollama.service; sudo userdel ollama 2>/dev/null || true", "sudo": true, "continueOnError": true }
+    { "id": "stop", "description": "Stop the Ollama user process.", "run": "pkill -f 'ollama serve' 2>/dev/null || true", "continueOnError": true },
+    { "id": "remove", "description": "Remove the Ollama binary, libraries and downloaded models from your home directory (can be several GB).", "run": "rm -rf \"$HOME/.local/bin/ollama\" \"$HOME/.local/lib/ollama\" \"$HOME/.ollama\"", "continueOnError": true }
   ]
 }

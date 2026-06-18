@@ -1,0 +1,24 @@
+{
+  "id": "io.github.mobilessh.llamaagents",
+  "name": "LlamaIndex Agents",
+  "category": "llm",
+  "description": "Run LlamaIndex agent workflows as a loopback service (llama-agents) on local Ollama. Kick off a workflow from your phone and get an ntfy push when it finishes. Experimental.",
+  "version": "0.1.0",
+  "minBridgeVersion": "1.0.0",
+  "author": "Mobile SSH",
+  "icon": "icon.svg",
+  "ui": {
+    "entry": "ui/index.html"
+  },
+  "sessionRequirement": "REQUIRES_ACTIVE_SESSION",
+  "capabilities": [
+    "SSH_EXEC",
+    "TUNNEL",
+    "HTTP_LOOPBACK",
+    "STORAGE",
+    "NOTIFICATIONS"
+  ],
+  "tunnel": {
+    "port": 8080
+  }
+}

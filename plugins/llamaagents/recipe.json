@@ -1,0 +1,57 @@
+{
+  "description": "Set up a local LlamaIndex agent-workflow server (llama-agents) on the remote: ensure Ollama, create a venv, write a sample workflow app driven by local Ollama, and serve it on 127.0.0.1:8080. Run workflows from the phone; long ones can ping you via ntfy on completion.",
+  "steps": [
+    {
+      "id": "ollama",
+      "description": "Make sure the AI Chat plugin's Ollama is running on 127.0.0.1:11434 (start it if installed). Install the AI Chat plugin first if this reports it missing.",
+      "check": "curl -fsS http://127.0.0.1:11434/api/version >/dev/null 2>&1",
+      "run": "export PATH=\"$HOME/.local/bin:$PATH\"; if command -v ollama >/dev/null 2>&1; then export OLLAMA_HOST=127.0.0.1:11434; nohup ollama serve >/tmp/ollama.log 2>&1 & for i in $(seq 1 20); do curl -fsS http://127.0.0.1:11434/api/version >/dev/null 2>&1 && exit 0; sleep 1; done; fi; echo \"Ollama not reachable on 127.0.0.1:11434 — install/run the AI Chat plugin first (it sets up Ollama with no root).\"",
+      "continueOnError": true,
+      "timeoutMs": 40000
+    },
+    {
+      "id": "models",
+      "description": "Pull the chat model with Ollama (skipped if present).",
+      "check": "export PATH=\"$HOME/.local/bin:$PATH\"; ollama list 2>/dev/null | grep -q 'llama3.1'",
+      "run": "export PATH=\"$HOME/.local/bin:$PATH\"; command -v ollama >/dev/null 2>&1 && ollama pull llama3.1 || echo \"Ollama CLI not found — install the AI Chat plugin first.\"",
+      "stream": true,
+      "continueOnError": true,
+      "timeoutMs": 1800000
+    },
+    {
+      "id": "venv",
+      "description": "Create a venv and install llama-agents-server + workflows + Ollama (no root).",
+      "check": "test -x \"$HOME/.mobilessh/llamaagents/venv/bin/python\"",
+      "run": "set -e; mkdir -p \"$HOME/.mobilessh/llamaagents\"; python3 -m venv \"$HOME/.mobilessh/llamaagents/venv\"; \"$HOME/.mobilessh/llamaagents/venv/bin/pip\" install -U pip; \"$HOME/.mobilessh/llamaagents/venv/bin/pip\" install llama-index-workflows llama-agents-server llama-agents-client llama-index-llms-ollama",
+      "stream": true,
+      "timeoutMs": 1800000
+    },
+    {
+      "id": "app",
+      "description": "Write the agent-workflow app (app.py): a sample workflow on local Ollama, plus a small /ask + /ask/{id} API on the WorkflowServer for the phone UI.",
+      "run": "mkdir -p \"$HOME/.mobilessh/llamaagents\"; cat > \"$HOME/.mobilessh/llamaagents/app.py\" <<'PYEOF'\nimport asyncio, uuid\nfrom workflows import Workflow, step\nfrom workflows.events import StartEvent, StopEvent\nfrom llama_index.llms.ollama import Ollama\nfrom llama_agents.server import WorkflowServer\nfrom starlette.requests import Request\nfrom starlette.responses import JSONResponse\n\nOLLAMA = \"http://127.0.0.1:11434\"\nllm = Ollama(model=\"llama3.1\", base_url=OLLAMA, request_timeout=180.0)\n\n\nclass Ask(Workflow):\n    @step\n    async def run_step(self, ev: StartEvent) -> StopEvent:\n        prompt = getattr(ev, \"prompt\", None) or \"Say hello.\"\n        result = await llm.acomplete(prompt)\n        return StopEvent(result=str(result))\n\n\nwf = Ask(timeout=600)\nserver = WorkflowServer()\nserver.add_workflow(\"ask\", wf)\n\n# A tiny, stable API the phone UI drives (avoids the raw event-envelope protocol).\nJOBS = {}\n\n\nasync def _run_job(job_id, prompt):\n    try:\n        result = await wf.run(prompt=prompt)\n        JOBS[job_id] = {\"status\": \"done\", \"result\": str(result)}\n    except Exception as e:  # noqa: BLE001\n        JOBS[job_id] = {\"status\": \"error\", \"result\": str(e)}\n\n\nasync def ask(request: Request):\n    try:\n        body = await request.json()\n    except Exception:  # noqa: BLE001\n        body = {}\n    prompt = (body or {}).get(\"prompt\") or \"Say hello.\"\n    job_id = uuid.uuid4().hex\n    JOBS[job_id] = {\"status\": \"running\", \"result\": None}\n    asyncio.create_task(_run_job(job_id, prompt))\n    return JSONResponse({\"id\": job_id})\n\n\nasync def ask_status(request: Request):\n    job_id = request.path_params[\"id\"]\n    return JSONResponse(JOBS.get(job_id, {\"status\": \"unknown\", \"result\": None}))\n\n\nserver.app.add_route(\"/ask\", ask, methods=[\"POST\"])\nserver.app.add_route(\"/ask/{id}\", ask_status, methods=[\"GET\"])\n\nif __name__ == \"__main__\":\n    asyncio.run(server.serve(host=\"127.0.0.1\", port=8080))\nPYEOF"
+    },
+    {
+      "id": "serve",
+      "description": "Start the agent server bound to loopback 127.0.0.1:8080 and wait for /health.",
+      "check": "curl -fsS http://127.0.0.1:8080/health >/dev/null 2>&1",
+      "run": "curl -fsS http://127.0.0.1:8080/health >/dev/null 2>&1 && exit 0; cd \"$HOME/.mobilessh/llamaagents\"; export WORKFLOWS_PY_SERVER_HOST=127.0.0.1 WORKFLOWS_PY_SERVER_PORT=8080; nohup \"$HOME/.mobilessh/llamaagents/venv/bin/python\" app.py >/tmp/llamaagents.log 2>&1 & for i in $(seq 1 60); do curl -fsS http://127.0.0.1:8080/health >/dev/null 2>&1 && exit 0; sleep 1; done; echo \"Agent server did not become ready; see /tmp/llamaagents.log (the workflows/llama-agents import paths may need adjusting for the installed version).\" >&2; tail -n 20 /tmp/llamaagents.log >&2 || true; exit 1",
+      "timeoutMs": 120000,
+      "forwardPort": 8080
+    }
+  ],
+  "uninstall": [
+    {
+      "id": "stop",
+      "description": "Stop the agent server.",
+      "run": "pkill -f \"$HOME/.mobilessh/llamaagents/venv/bin/python app.py\" 2>/dev/null || pkill -f \"llamaagents/.*app.py\" 2>/dev/null || true",
+      "continueOnError": true
+    },
+    {
+      "id": "remove",
+      "description": "Remove the agent venv and app.",
+      "run": "rm -rf \"$HOME/.mobilessh/llamaagents\"",
+      "continueOnError": true
+    }
+  ]
+}

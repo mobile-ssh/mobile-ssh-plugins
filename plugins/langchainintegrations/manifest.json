@@ -1,0 +1,18 @@
+{
+  "id": "io.github.mobilessh.langchainintegrations",
+  "name": "LangChain Integrations",
+  "category": "other",
+  "description": "Browse common LangChain integration packages and install one on the server (pip) into the LangChain RAG venv. Commands are shown for consent before they run.",
+  "version": "0.1.0",
+  "minBridgeVersion": "1.0.0",
+  "author": "Mobile SSH",
+  "icon": "icon.svg",
+  "ui": {
+    "entry": "ui/index.html"
+  },
+  "sessionRequirement": "REQUIRES_ACTIVE_SESSION",
+  "capabilities": [
+    "SSH_EXEC",
+    "STORAGE"
+  ]
+}

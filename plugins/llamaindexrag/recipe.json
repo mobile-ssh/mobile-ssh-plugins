@@ -1,0 +1,57 @@
+{
+  "description": "Set up a local LlamaIndex RAG API on the remote: ensure Ollama, pull models, create a venv, write a FastAPI app that indexes ~/rag-docs into an embedded LanceDB store, and serve it on 127.0.0.1:8200. Nothing leaves the server except the model/package downloads at install time.",
+  "steps": [
+    {
+      "id": "ollama",
+      "description": "Make sure the AI Chat plugin's Ollama is running on 127.0.0.1:11434 (start it if installed). Install the AI Chat plugin first if this reports it missing.",
+      "check": "curl -fsS http://127.0.0.1:11434/api/version >/dev/null 2>&1",
+      "run": "export PATH=\"$HOME/.local/bin:$PATH\"; if command -v ollama >/dev/null 2>&1; then export OLLAMA_HOST=127.0.0.1:11434; nohup ollama serve >/tmp/ollama.log 2>&1 & for i in $(seq 1 20); do curl -fsS http://127.0.0.1:11434/api/version >/dev/null 2>&1 && exit 0; sleep 1; done; fi; echo \"Ollama not reachable on 127.0.0.1:11434 — install/run the AI Chat plugin first (it sets up Ollama with no root).\"",
+      "continueOnError": true,
+      "timeoutMs": 40000
+    },
+    {
+      "id": "models",
+      "description": "Pull the chosen chat + embedding models with Ollama (skipped if already present).",
+      "check": "export PATH=\"$HOME/.local/bin:$PATH\"; ollama list 2>/dev/null | grep -qF '{{model}}' && ollama list 2>/dev/null | grep -qF '{{embed}}'",
+      "run": "export PATH=\"$HOME/.local/bin:$PATH\"; if command -v ollama >/dev/null 2>&1; then ollama pull {{model}}; ollama pull {{embed}}; else echo \"Ollama CLI not found — install the AI Chat plugin first.\"; fi",
+      "stream": true,
+      "continueOnError": true,
+      "timeoutMs": 1800000
+    },
+    {
+      "id": "venv",
+      "description": "Create a Python venv and install LlamaIndex + FastAPI + LanceDB (no root).",
+      "check": "test -x \"$HOME/.mobilessh/llamaindex/venv/bin/python\"",
+      "run": "set -e; mkdir -p \"$HOME/.mobilessh/llamaindex\"; python3 -m venv \"$HOME/.mobilessh/llamaindex/venv\"; \"$HOME/.mobilessh/llamaindex/venv/bin/pip\" install -U pip; \"$HOME/.mobilessh/llamaindex/venv/bin/pip\" install fastapi \"uvicorn[standard]\" llama-index llama-index-llms-ollama llama-index-embeddings-ollama llama-index-vector-stores-lancedb lancedb pandas",
+      "stream": true,
+      "timeoutMs": 1800000
+    },
+    {
+      "id": "app",
+      "description": "Write the FastAPI RAG app (app.py) to ~/.mobilessh/llamaindex.",
+      "run": "mkdir -p \"$HOME/.mobilessh/llamaindex\"; cat > \"$HOME/.mobilessh/llamaindex/app.py\" <<'PYEOF'\nimport os\nfrom fastapi import FastAPI\nfrom pydantic import BaseModel\nfrom llama_index.core import VectorStoreIndex, SimpleDirectoryReader, Settings, StorageContext\nfrom llama_index.llms.ollama import Ollama\nfrom llama_index.embeddings.ollama import OllamaEmbedding\nfrom llama_index.vector_stores.lancedb import LanceDBVectorStore\n\nDOCS  = os.path.expanduser(os.environ.get(\"RAG_DOCS\", \"~/rag-docs\"))\nDBURI = os.path.expanduser(\"~/.mobilessh/llamaindex/lancedb\")\nMODEL = os.environ.get(\"RAG_MODEL\", \"llama3.1\")\nEMBED = os.environ.get(\"RAG_EMBED\", \"nomic-embed-text\")\nOLLAMA = os.environ.get(\"OLLAMA_BASE_URL\", \"http://127.0.0.1:11434\")\n\nSettings.llm = Ollama(model=MODEL, base_url=OLLAMA, request_timeout=120.0)\nSettings.embed_model = OllamaEmbedding(model_name=EMBED, base_url=OLLAMA)\n\ndef build():\n    os.makedirs(DOCS, exist_ok=True)\n    vs = LanceDBVectorStore(uri=DBURI, table_name=\"docs\")\n    storage = StorageContext.from_defaults(vector_store=vs)\n    files = [f for f in os.listdir(DOCS) if not f.startswith(\".\")]\n    docs = SimpleDirectoryReader(DOCS).load_data() if files else []\n    return VectorStoreIndex.from_documents(docs, storage_context=storage)\n\nindex = build()\napp = FastAPI()\n\nclass Q(BaseModel):\n    query: str\n\n@app.get(\"/health\")\ndef health():\n    return {\"ok\": True}\n\n@app.post(\"/reindex\")\ndef reindex():\n    global index\n    index = build()\n    return {\"ok\": True}\n\n@app.post(\"/query\")\ndef query(q: Q):\n    return {\"response\": str(index.as_query_engine().query(q.query))}\nPYEOF"
+    },
+    {
+      "id": "serve",
+      "description": "Start the RAG API bound to loopback 127.0.0.1:8200 and wait for /health.",
+      "check": "curl -fsS http://127.0.0.1:8200/health >/dev/null 2>&1",
+      "run": "cd \"$HOME/.mobilessh/llamaindex\"; export RAG_MODEL=\"{{model}}\" RAG_EMBED=\"{{embed}}\" RAG_DOCS=\"{{docs}}\"; pkill -f \"uvicorn app:app --host 127.0.0.1 --port 8200\" 2>/dev/null || true; sleep 1; nohup \"$HOME/.mobilessh/llamaindex/venv/bin/uvicorn\" app:app --host 127.0.0.1 --port 8200 >/tmp/llamaindex-rag.log 2>&1 & for i in $(seq 1 60); do curl -fsS http://127.0.0.1:8200/health >/dev/null 2>&1 && exit 0; sleep 1; done; echo \"RAG API did not become ready; see /tmp/llamaindex-rag.log\" >&2; tail -n 20 /tmp/llamaindex-rag.log >&2 || true; exit 1",
+      "timeoutMs": 120000,
+      "forwardPort": 8200
+    }
+  ],
+  "uninstall": [
+    {
+      "id": "stop",
+      "description": "Stop the RAG API.",
+      "run": "pkill -f \"uvicorn app:app --host 127.0.0.1 --port 8200\" 2>/dev/null || true",
+      "continueOnError": true
+    },
+    {
+      "id": "remove",
+      "description": "Remove the RAG venv and LanceDB index (your ~/rag-docs files are kept).",
+      "run": "rm -rf \"$HOME/.mobilessh/llamaindex\"",
+      "continueOnError": true
+    }
+  ]
+}

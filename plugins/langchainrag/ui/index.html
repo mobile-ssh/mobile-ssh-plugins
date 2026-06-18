@@ -1,0 +1,42 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>LangChain RAG</title>
+  <style>
+    html,body { height:100%; }
+    body { margin:0; display:flex; flex-direction:column; font:16px/1.45 system-ui,sans-serif;
+           background:#1a1a2e; color:#eee;
+           padding-bottom:max(16px,env(safe-area-inset-bottom)); }
+    header { padding:10px 14px; background:#23233a; font-weight:600;
+             display:flex; align-items:center; gap:10px; }
+    header .title { flex:1; }
+    header small { display:block; font-weight:400; color:#9a9ab0; font-size:12px; }
+    #reindex { padding:6px 12px; border:0; border-radius:8px; background:#2a2a44; color:#eee; font-size:13px; }
+    #reindex:disabled { opacity:.5; }
+    #chat { flex:1; overflow:auto; padding:12px; }
+    .msg { margin:8px 0; padding:10px 12px; border-radius:12px; max-width:88%;
+           white-space:pre-wrap; word-break:break-word; }
+    .me { background:#1C9C7C; color:#fff; margin-left:auto; border-bottom-right-radius:3px; }
+    .ai { background:#23233a; border-bottom-left-radius:3px; }
+    .sys { color:#9a9ab0; font-size:13px; text-align:center; }
+    form { display:flex; gap:8px; padding:10px; background:#15151f; }
+    input { flex:1; padding:12px; border-radius:10px; border:0; background:#23233a; color:#eee; font-size:16px; }
+    button#send { padding:0 16px; border:0; border-radius:10px; background:#1C9C7C; color:#fff; font-size:16px; }
+    button:disabled { opacity:.5; }
+  </style>
+</head>
+<body>
+  <header>
+    <span class="title">LangChain RAG<small id="sub">connecting…</small></span>
+    <button id="reindex" disabled>Reindex</button>
+  </header>
+  <div id="chat"></div>
+  <form id="f">
+    <input id="in" placeholder="Ask about your docs…" autocomplete="off" disabled />
+    <button id="send" disabled>Send</button>
+  </form>
+  <script src="./app.js"></script>
+</body>
+</html>

@@ -1,0 +1,58 @@
+{
+  "description": "Install Chainlit + LlamaIndex (Ollama) in a venv on the remote and run the chat app bound to 127.0.0.1:8000 (Chainlit binds loopback by default). Open it over the tunnel.",
+  "steps": [
+    {
+      "id": "ollama",
+      "description": "Make sure the AI Chat plugin's Ollama is running on 127.0.0.1:11434 (start it if installed). Install the AI Chat plugin first if this reports it missing.",
+      "check": "curl -fsS http://127.0.0.1:11434/api/version >/dev/null 2>&1",
+      "run": "export PATH=\"$HOME/.local/bin:$PATH\"; if command -v ollama >/dev/null 2>&1; then export OLLAMA_HOST=127.0.0.1:11434; nohup ollama serve >/tmp/ollama.log 2>&1 & for i in $(seq 1 20); do curl -fsS http://127.0.0.1:11434/api/version >/dev/null 2>&1 && exit 0; sleep 1; done; fi; echo \"Ollama not reachable on 127.0.0.1:11434 — install/run the AI Chat plugin first (it sets up Ollama with no root).\"",
+      "continueOnError": true,
+      "timeoutMs": 40000
+    },
+    {
+      "id": "models",
+      "description": "Pull the chat model with Ollama (skipped if present).",
+      "check": "export PATH=\"$HOME/.local/bin:$PATH\"; ollama list 2>/dev/null | grep -q 'llama3.1'",
+      "run": "export PATH=\"$HOME/.local/bin:$PATH\"; command -v ollama >/dev/null 2>&1 && ollama pull llama3.1 || echo \"Ollama CLI not found — install the AI Chat plugin first.\"",
+      "stream": true,
+      "continueOnError": true,
+      "timeoutMs": 1800000
+    },
+    {
+      "id": "venv",
+      "description": "Create a venv and install Chainlit + LlamaIndex Ollama (no root).",
+      "check": "test -x \"$HOME/.mobilessh/chainlit/venv/bin/chainlit\"",
+      "run": "set -e; mkdir -p \"$HOME/.mobilessh/chainlit\"; python3 -m venv \"$HOME/.mobilessh/chainlit/venv\"; \"$HOME/.mobilessh/chainlit/venv/bin/pip\" install -U pip; \"$HOME/.mobilessh/chainlit/venv/bin/pip\" install chainlit llama-index-llms-ollama",
+      "stream": true,
+      "timeoutMs": 1800000
+    },
+    {
+      "id": "app",
+      "description": "Write the Chainlit app (app.py).",
+      "run": "mkdir -p \"$HOME/.mobilessh/chainlit\"; cat > \"$HOME/.mobilessh/chainlit/app.py\" <<'PYEOF'\nimport chainlit as cl\nfrom llama_index.llms.ollama import Ollama\n\nllm = Ollama(model=\"llama3.1\", base_url=\"http://127.0.0.1:11434\", request_timeout=120.0)\n\n@cl.on_message\nasync def main(message: cl.Message):\n    resp = await cl.make_async(llm.complete)(message.content)\n    await cl.Message(content=str(resp)).send()\nPYEOF"
+    },
+    {
+      "id": "serve",
+      "description": "Start Chainlit bound to loopback 127.0.0.1:8000 (headless) and wait for it.",
+      "check": "curl -fsS http://127.0.0.1:8000/ >/dev/null 2>&1",
+      "run": "cd \"$HOME/.mobilessh/chainlit\"; nohup \"$HOME/.mobilessh/chainlit/venv/bin/chainlit\" run app.py --host 127.0.0.1 --port 8000 --headless >/tmp/chainlit.log 2>&1 & for i in $(seq 1 40); do curl -fsS http://127.0.0.1:8000/ >/dev/null 2>&1 && exit 0; sleep 1; done; echo \"Chainlit still starting — open it in a moment.\"; ",
+      "continueOnError": true,
+      "timeoutMs": 90000,
+      "forwardPort": 8000
+    }
+  ],
+  "uninstall": [
+    {
+      "id": "stop",
+      "description": "Stop Chainlit.",
+      "run": "pkill -f \"chainlit run app.py\" 2>/dev/null || true",
+      "continueOnError": true
+    },
+    {
+      "id": "remove",
+      "description": "Remove the Chainlit venv.",
+      "run": "rm -rf \"$HOME/.mobilessh/chainlit\"",
+      "continueOnError": true
+    }
+  ]
+}

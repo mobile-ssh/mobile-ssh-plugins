@@ -1,0 +1,40 @@
+{
+  "description": "Run the official Qdrant vector DB in Docker bound to loopback 127.0.0.1:6333 (REST + dashboard) and 6334 (gRPC), telemetry disabled, data in the Docker volume \"qdrant\". Fully offline.",
+  "requires": [
+    "docker"
+  ],
+  "steps": [
+    {
+      "id": "check-docker",
+      "description": "Verify Docker is installed.",
+      "run": "docker --version"
+    },
+    {
+      "id": "run",
+      "description": "Start the Qdrant container bound to loopback (telemetry disabled), data in the Docker volume \"qdrant\".",
+      "check": "docker ps --filter name=^/qdrant$ --filter status=running -q | grep -q .",
+      "run": "docker rm -f qdrant 2>/dev/null || true; docker run -d --name qdrant --restart unless-stopped -p 127.0.0.1:6333:6333 -p 127.0.0.1:6334:6334 -e QDRANT__TELEMETRY_DISABLED=true -v qdrant:/qdrant/storage qdrant/qdrant",
+      "sudo": true,
+      "stream": true,
+      "timeoutMs": 600000,
+      "forwardPort": 6333
+    },
+    {
+      "id": "wait",
+      "description": "Wait for Qdrant to answer.",
+      "check": "curl -fsS http://127.0.0.1:6333/readyz >/dev/null 2>&1",
+      "run": "for i in $(seq 1 40); do curl -fsS http://127.0.0.1:6333/readyz >/dev/null 2>&1 && exit 0; sleep 1; done; echo \"Qdrant still starting.\"",
+      "continueOnError": true,
+      "timeoutMs": 60000
+    }
+  ],
+  "uninstall": [
+    {
+      "id": "remove",
+      "description": "Stop and remove the Qdrant container and its data volume.",
+      "run": "docker rm -f qdrant 2>/dev/null || true; docker volume rm qdrant 2>/dev/null || true",
+      "sudo": true,
+      "continueOnError": true
+    }
+  ]
+}

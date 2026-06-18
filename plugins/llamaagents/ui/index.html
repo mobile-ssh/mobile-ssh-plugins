@@ -1,0 +1,46 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>LlamaIndex Agents</title>
+  <style>
+    html,body { height:100%; }
+    body { margin:0; display:flex; flex-direction:column;
+           font:16px/1.45 system-ui,sans-serif; background:#1a1a2e; color:#eee;
+           padding-bottom:max(16px,env(safe-area-inset-bottom)); }
+    header { padding:10px 14px; background:#23233a; font-weight:600; }
+    header small { display:block; font-weight:400; color:#9a9ab0; font-size:12px; }
+    #main { flex:1; overflow:auto; padding:12px; }
+    .row { display:flex; gap:8px; align-items:center; margin-bottom:10px; }
+    select, input { flex:1; padding:12px; border-radius:10px; border:0;
+            background:#23233a; color:#eee; font-size:16px; }
+    button { padding:0 16px; min-height:44px; border:0; border-radius:10px;
+             background:#6D28D9; color:#fff; font-size:16px; }
+    button:disabled { opacity:.5; }
+    .result { background:#23233a; border-radius:12px; padding:12px; margin:10px 0;
+              white-space:pre-wrap; word-break:break-word; }
+    .label { color:#9a9ab0; font-size:13px; margin:4px 0; }
+    #log { background:#15151f; border-radius:10px; padding:10px; margin-top:12px;
+           color:#9a9ab0; font-size:12px; white-space:pre-wrap; word-break:break-word;
+           max-height:30vh; overflow:auto; }
+  </style>
+</head>
+<body>
+  <header>LlamaIndex Agents<small id="sub">connecting…</small></header>
+  <div id="main">
+    <div class="label">Workflow</div>
+    <div class="row">
+      <select id="wf" disabled></select>
+    </div>
+    <div class="label">Prompt</div>
+    <div class="row">
+      <input id="prompt" placeholder="Ask the agent…" autocomplete="off" disabled />
+      <button id="run" disabled>Run</button>
+    </div>
+    <div id="results"></div>
+    <pre id="log"></pre>
+  </div>
+  <script src="./app.js"></script>
+</body>
+</html>

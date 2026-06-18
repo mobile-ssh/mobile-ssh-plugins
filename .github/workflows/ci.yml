@@ -23,8 +23,4 @@ jobs:
       - name: Validate manifests, recipes, and catalog
         run: node tools/validate.mjs
       - name: Lint plugin UI JavaScript (syntax check)
-        run: |
-          set -e
-          for f in $(find plugins template-plugin sdk -name '*.js' 2>/dev/null); do
-            node --check "$f"
-          done
+        run: node tools/check-syntax.mjs

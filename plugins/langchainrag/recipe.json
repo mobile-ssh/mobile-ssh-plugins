@@ -1,0 +1,57 @@
+{
+  "description": "Set up a local LangChain RAG API on the remote: ensure Ollama, pull models, create a venv, write a FastAPI app that indexes ~/rag-docs into an embedded Chroma store, and serve it on 127.0.0.1:8210.",
+  "steps": [
+    {
+      "id": "ollama",
+      "description": "Make sure the AI Chat plugin's Ollama is running on 127.0.0.1:11434 (start it if installed). Install the AI Chat plugin first if this reports it missing.",
+      "check": "curl -fsS http://127.0.0.1:11434/api/version >/dev/null 2>&1",
+      "run": "export PATH=\"$HOME/.local/bin:$PATH\"; if command -v ollama >/dev/null 2>&1; then export OLLAMA_HOST=127.0.0.1:11434; nohup ollama serve >/tmp/ollama.log 2>&1 & for i in $(seq 1 20); do curl -fsS http://127.0.0.1:11434/api/version >/dev/null 2>&1 && exit 0; sleep 1; done; fi; echo \"Ollama not reachable on 127.0.0.1:11434 — install/run the AI Chat plugin first (it sets up Ollama with no root).\"",
+      "continueOnError": true,
+      "timeoutMs": 40000
+    },
+    {
+      "id": "models",
+      "description": "Pull the chosen chat + embedding models with Ollama (skipped if already present).",
+      "check": "export PATH=\"$HOME/.local/bin:$PATH\"; ollama list 2>/dev/null | grep -qF '{{model}}' && ollama list 2>/dev/null | grep -qF '{{embed}}'",
+      "run": "export PATH=\"$HOME/.local/bin:$PATH\"; if command -v ollama >/dev/null 2>&1; then ollama pull {{model}}; ollama pull {{embed}}; else echo \"Ollama CLI not found — install the AI Chat plugin first.\"; fi",
+      "stream": true,
+      "continueOnError": true,
+      "timeoutMs": 1800000
+    },
+    {
+      "id": "venv",
+      "description": "Create a Python venv and install LangChain + FastAPI + Chroma (no root).",
+      "check": "test -x \"$HOME/.mobilessh/langchain/venv/bin/python\"",
+      "run": "set -e; mkdir -p \"$HOME/.mobilessh/langchain\"; python3 -m venv \"$HOME/.mobilessh/langchain/venv\"; \"$HOME/.mobilessh/langchain/venv/bin/pip\" install -U pip; \"$HOME/.mobilessh/langchain/venv/bin/pip\" install fastapi \"uvicorn[standard]\" langchain langchain-core langchain-community langchain-ollama langchain-chroma langchain-text-splitters chromadb",
+      "stream": true,
+      "timeoutMs": 1800000
+    },
+    {
+      "id": "app",
+      "description": "Write the FastAPI RAG app (app.py) to ~/.mobilessh/langchain.",
+      "run": "mkdir -p \"$HOME/.mobilessh/langchain\"; cat > \"$HOME/.mobilessh/langchain/app.py\" <<'PYEOF'\nimport os\nfrom fastapi import FastAPI\nfrom pydantic import BaseModel\nfrom langchain_ollama import ChatOllama, OllamaEmbeddings\nfrom langchain_chroma import Chroma\nfrom langchain_community.document_loaders import DirectoryLoader, TextLoader\nfrom langchain_text_splitters import RecursiveCharacterTextSplitter\nfrom langchain_core.prompts import ChatPromptTemplate\nfrom langchain_core.runnables import RunnablePassthrough\nfrom langchain_core.output_parsers import StrOutputParser\n\nDOCS = os.path.expanduser(os.environ.get(\"RAG_DOCS\", \"~/rag-docs\"))\nDBDIR = os.path.expanduser(\"~/.mobilessh/langchain/chroma\")\nMODEL = os.environ.get(\"RAG_MODEL\", \"llama3.1\")\nEMBED = os.environ.get(\"RAG_EMBED\", \"nomic-embed-text\")\nOLLAMA = os.environ.get(\"OLLAMA_BASE_URL\", \"http://127.0.0.1:11434\")\n\nemb = OllamaEmbeddings(model=EMBED, base_url=OLLAMA)\nllm = ChatOllama(model=MODEL, base_url=OLLAMA)\nstore = Chroma(collection_name=\"docs\", embedding_function=emb, persist_directory=DBDIR)\nprompt = ChatPromptTemplate.from_template(\n    \"Answer the question using only the context.\\n\\nContext:\\n{context}\\n\\nQuestion: {question}\")\n\n\ndef fmt(d):\n    return \"\\n\\n\".join(x.page_content for x in d)\n\n\ndef ingest():\n    # Rebuild from scratch so repeated /reindex calls do not duplicate vectors.\n    global store\n    try:\n        store.delete_collection()\n    except Exception:\n        pass\n    store = Chroma(collection_name=\"docs\", embedding_function=emb, persist_directory=DBDIR)\n    os.makedirs(DOCS, exist_ok=True)\n    docs = []\n    for g in (\"**/*.md\", \"**/*.txt\"):\n        try:\n            docs += DirectoryLoader(DOCS, glob=g, loader_cls=TextLoader, silent_errors=True).load()\n        except Exception:\n            pass\n    if docs:\n        chunks = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=150).split_documents(docs)\n        store.add_documents(chunks)\n\n\napp = FastAPI()\n\n\n@app.on_event(\"startup\")\ndef _boot():\n    # Index whatever is already in DOCS so the first query has context.\n    try:\n        ingest()\n    except Exception:\n        pass\n\n\nclass Q(BaseModel):\n    query: str\n\n\n@app.get(\"/health\")\ndef health():\n    return {\"ok\": True}\n\n\n@app.post(\"/reindex\")\ndef reindex():\n    ingest()\n    return {\"ok\": True}\n\n\n@app.post(\"/query\")\ndef query(q: Q):\n    retr = store.as_retriever()\n    chain = {\"context\": retr | fmt, \"question\": RunnablePassthrough()} | prompt | llm | StrOutputParser()\n    return {\"response\": chain.invoke(q.query)}\nPYEOF"
+    },
+    {
+      "id": "serve",
+      "description": "Start the RAG API bound to loopback 127.0.0.1:8210 and wait for /health.",
+      "check": "curl -fsS http://127.0.0.1:8210/health >/dev/null 2>&1",
+      "run": "cd \"$HOME/.mobilessh/langchain\"; export RAG_MODEL=\"{{model}}\" RAG_EMBED=\"{{embed}}\" RAG_DOCS=\"{{docs}}\"; pkill -f \"uvicorn app:app --host 127.0.0.1 --port 8210\" 2>/dev/null || true; sleep 1; nohup \"$HOME/.mobilessh/langchain/venv/bin/uvicorn\" app:app --host 127.0.0.1 --port 8210 >/tmp/langchain-rag.log 2>&1 & for i in $(seq 1 60); do curl -fsS http://127.0.0.1:8210/health >/dev/null 2>&1 && exit 0; sleep 1; done; echo \"RAG API did not become ready; see /tmp/langchain-rag.log\" >&2; tail -n 20 /tmp/langchain-rag.log >&2 || true; exit 1",
+      "timeoutMs": 120000,
+      "forwardPort": 8210
+    }
+  ],
+  "uninstall": [
+    {
+      "id": "stop",
+      "description": "Stop the RAG API.",
+      "run": "pkill -f \"uvicorn app:app --host 127.0.0.1 --port 8210\" 2>/dev/null || true",
+      "continueOnError": true
+    },
+    {
+      "id": "remove",
+      "description": "Remove the RAG venv and Chroma index (your ~/rag-docs files are kept).",
+      "run": "rm -rf \"$HOME/.mobilessh/langchain\"",
+      "continueOnError": true
+    }
+  ]
+}

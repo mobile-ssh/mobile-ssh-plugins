@@ -21,12 +21,17 @@
       log(t('setup_msg'));
       var res = await MobileSSH.recipe.run();
       if (!res.ok) { log(t('setup_failed')); btn.disabled = false; return; }
-      tunnel = await MobileSSH.tunnel.open({ port: 3000 });
-      log(t('reachable_at', tunnel.url));
-      log(t('first_time'));
-      openBtn.classList.remove('hidden');
-      openExtBtn.classList.remove('hidden');
+      // The container is installed/running now — reflect that even if opening the tunnel fails.
       btn.textContent = t('rerun');
+      try {
+        tunnel = await MobileSSH.tunnel.open({ port: 3000 });
+        log(t('reachable_at', tunnel.url));
+        log(t('first_time'));
+        openBtn.classList.remove('hidden');
+        openExtBtn.classList.remove('hidden');
+      } catch (te) {
+        log(t('tunnel_failed', te.message));
+      }
     } catch (e) {
       log(t('error', e.message));
     }

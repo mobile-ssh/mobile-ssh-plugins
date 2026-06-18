@@ -1,0 +1,22 @@
+{
+  "id": "io.github.mobilessh.dify",
+  "name": "Dify",
+  "category": "llm",
+  "description": "Self-host the Dify LLM-app platform (Docker Compose) on the remote, bound to loopback. Configure Ollama as the model provider for fully local apps. Heavy: pulls several containers.",
+  "version": "0.1.0",
+  "minBridgeVersion": "1.0.0",
+  "author": "Mobile SSH",
+  "icon": "icon.svg",
+  "ui": {
+    "entry": "ui/index.html"
+  },
+  "sessionRequirement": "REQUIRES_ACTIVE_SESSION",
+  "capabilities": [
+    "SSH_EXEC",
+    "TUNNEL"
+  ],
+  "tunnel": {
+    "port": 8088
+  },
+  "serviceUrl": "{tunnelUrl}/"
+}

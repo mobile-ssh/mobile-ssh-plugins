@@ -7,7 +7,8 @@
   "scripts": {
     "validate": "node tools/validate.mjs",
     "build-catalog": "node tools/build-catalog.mjs",
-    "check": "node tools/build-catalog.mjs && node tools/validate.mjs"
+    "check-syntax": "node tools/check-syntax.mjs",
+    "check": "node tools/build-catalog.mjs && node tools/validate.mjs && node tools/check-syntax.mjs"
   },
   "devDependencies": {
     "ajv": "^8.17.1",

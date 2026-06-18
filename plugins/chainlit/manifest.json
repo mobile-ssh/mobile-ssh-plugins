@@ -1,0 +1,22 @@
+{
+  "id": "io.github.mobilessh.chainlit",
+  "name": "Chainlit Chat",
+  "category": "llm",
+  "description": "Run a Chainlit chat app (LlamaIndex over local Ollama) on the remote, bound to loopback. Open its web UI in-app or in your browser. No cloud keys.",
+  "version": "0.1.0",
+  "minBridgeVersion": "1.0.0",
+  "author": "Mobile SSH",
+  "icon": "icon.svg",
+  "ui": {
+    "entry": "ui/index.html"
+  },
+  "sessionRequirement": "REQUIRES_ACTIVE_SESSION",
+  "capabilities": [
+    "SSH_EXEC",
+    "TUNNEL"
+  ],
+  "tunnel": {
+    "port": 8000
+  },
+  "serviceUrl": "{tunnelUrl}/"
+}

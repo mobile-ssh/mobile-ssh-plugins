@@ -1,0 +1,40 @@
+{
+  "description": "Run the official Chroma vector DB (pinned image) in Docker bound to loopback 127.0.0.1:8001 (container port 8000), data in the Docker volume \"chroma\". Reach it from RAG apps at http://127.0.0.1:8001.",
+  "requires": [
+    "docker"
+  ],
+  "steps": [
+    {
+      "id": "check-docker",
+      "description": "Verify Docker is installed.",
+      "run": "docker --version"
+    },
+    {
+      "id": "run",
+      "description": "Start the Chroma container (chromadb/chroma:1.0.0) bound to loopback 127.0.0.1:8001.",
+      "check": "docker ps --filter name=^/chroma$ --filter status=running -q | grep -q .",
+      "run": "docker rm -f chroma 2>/dev/null || true; docker run -d --name chroma --restart unless-stopped -p 127.0.0.1:8001:8000 -v chroma:/data chromadb/chroma:1.0.0",
+      "sudo": true,
+      "stream": true,
+      "timeoutMs": 600000,
+      "forwardPort": 8001
+    },
+    {
+      "id": "wait",
+      "description": "Wait for Chroma to answer its heartbeat.",
+      "check": "curl -fsS http://127.0.0.1:8001/api/v2/heartbeat >/dev/null 2>&1 || curl -fsS http://127.0.0.1:8001/api/v1/heartbeat >/dev/null 2>&1",
+      "run": "for i in $(seq 1 40); do { curl -fsS http://127.0.0.1:8001/api/v2/heartbeat >/dev/null 2>&1 || curl -fsS http://127.0.0.1:8001/api/v1/heartbeat >/dev/null 2>&1; } && exit 0; sleep 1; done; echo \"Chroma still starting.\"",
+      "continueOnError": true,
+      "timeoutMs": 60000
+    }
+  ],
+  "uninstall": [
+    {
+      "id": "remove",
+      "description": "Stop and remove the Chroma container and its data volume.",
+      "run": "docker rm -f chroma 2>/dev/null || true; docker volume rm chroma 2>/dev/null || true",
+      "sudo": true,
+      "continueOnError": true
+    }
+  ]
+}

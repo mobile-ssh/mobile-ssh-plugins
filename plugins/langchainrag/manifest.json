@@ -1,0 +1,60 @@
+{
+  "id": "io.github.mobilessh.langchainrag",
+  "name": "LangChain RAG",
+  "category": "llm",
+  "description": "Chat over your server files with a local LangChain retrieval app (Ollama LLM + embeddings, embedded Chroma). FastAPI on loopback — your documents and queries never leave the tunnel.",
+  "version": "0.1.0",
+  "minBridgeVersion": "1.0.0",
+  "author": "Mobile SSH",
+  "icon": "icon.svg",
+  "ui": {
+    "entry": "ui/index.html"
+  },
+  "sessionRequirement": "REQUIRES_ACTIVE_SESSION",
+  "capabilities": [
+    "SSH_EXEC",
+    "TUNNEL",
+    "HTTP_LOOPBACK",
+    "STORAGE"
+  ],
+  "tunnel": {
+    "port": 8210
+  },
+  "settings": [
+    {
+      "key": "model",
+      "label": "Chat model",
+      "type": "select",
+      "default": "llama3.1",
+      "help": "Ollama model used to answer (pulled on the server).",
+      "options": [
+        {
+          "value": "llama3.2:3b",
+          "label": "Llama 3.2 (3B) — fast"
+        },
+        {
+          "value": "llama3.1",
+          "label": "Llama 3.1 (8B)"
+        },
+        {
+          "value": "qwen2.5:7b",
+          "label": "Qwen2.5 (7B)"
+        }
+      ]
+    },
+    {
+      "key": "embed",
+      "label": "Embedding model",
+      "type": "string",
+      "default": "nomic-embed-text",
+      "help": "Ollama embedding model used to index your files."
+    },
+    {
+      "key": "docs",
+      "label": "Docs folder on server",
+      "type": "string",
+      "default": "~/rag-docs",
+      "help": "Folder whose .md/.txt files are indexed."
+    }
+  ]
+}

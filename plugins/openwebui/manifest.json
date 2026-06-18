@@ -1,8 +1,8 @@
 {
   "id": "io.github.mobilessh.openwebui",
   "name": "Open WebUI",
-  "description": "Full chat web UI for Ollama (Open WebUI) on the remote — open it in-app or in your phone's browser. Reuses your existing Ollama models.",
-  "version": "1.0.0",
+  "description": "Full chat web UI for Ollama (Open WebUI) on the remote — open it in-app or in your phone's browser. Reuses the AI Chat plugin's Ollama and models (sets one up automatically if needed).",
+  "version": "1.1.0",
   "minBridgeVersion": "1.0.0",
   "category": "llm",
   "icon": "icon.svg",

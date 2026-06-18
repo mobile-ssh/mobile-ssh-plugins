@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>LlamaHub Loaders</title>
+  <style>
+    :root {
+      --bg: #14141f;
+      --text: #e6e6ef;
+      --accent: #0D9488;
+    }
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: system-ui, -apple-system, sans-serif;
+      font-size: 16px;
+    }
+    body {
+      padding: 16px;
+      padding-bottom: max(16px, env(safe-area-inset-bottom));
+    }
+    h1 { font-size: 20px; margin: 0 0 4px; }
+    p.sub { margin: 0 0 16px; opacity: 0.7; font-size: 14px; }
+    input.filter {
+      width: 100%;
+      padding: 12px;
+      border-radius: 10px;
+      border: 1px solid rgba(255,255,255,0.15);
+      background: rgba(255,255,255,0.05);
+      color: var(--text);
+      font-size: 16px;
+      margin-bottom: 14px;
+    }
+    .row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 12px;
+      border-radius: 10px;
+      background: rgba(255,255,255,0.05);
+      margin-bottom: 8px;
+    }
+    .row .name { font-size: 15px; word-break: break-all; }
+    .row .name .done { color: var(--accent); font-size: 12px; display: block; margin-top: 2px; }
+    button {
+      background: var(--accent);
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      padding: 10px 16px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    button:disabled { opacity: 0.5; }
+    pre#log {
+      margin-top: 16px;
+      padding: 12px;
+      border-radius: 10px;
+      background: #000;
+      color: #9fefb0;
+      font-size: 12px;
+      white-space: pre-wrap;
+      word-break: break-word;
+      max-height: 260px;
+      overflow: auto;
+    }
+  </style>
+</head>
+<body>
+  <h1>LlamaHub Loaders</h1>
+  <p class="sub">Install a LlamaIndex reader or pack (pip) into the LlamaIndex RAG venv. The command is shown for consent before it runs.</p>
+  <input id="filter" class="filter" type="text" placeholder="Filter packages..." autocapitalize="off" autocomplete="off">
+  <div id="list"></div>
+  <pre id="log" hidden></pre>
+  <script src="./app.js"></script>
+</body>
+</html>

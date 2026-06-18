@@ -1,0 +1,21 @@
+{
+  "description": "Install a chosen LangChain integration package (pip) into the LangChain RAG plugin venv. Only the literal pip command runs, after you approve it. The package name comes from the plugin's bundled list.",
+  "steps": [
+    {
+      "id": "install",
+      "description": "pip install the selected LangChain package into ~/.mobilessh/langchain/venv (creates the venv if the RAG plugin has not yet).",
+      "run": "set -e; VENV=\"$HOME/.mobilessh/langchain/venv\"; test -x \"$VENV/bin/pip\" || python3 -m venv \"$VENV\"; \"$VENV/bin/pip\" install \"{{package}}\"",
+      "stream": true,
+      "timeoutMs": 900000,
+      "check": "\"$HOME/.mobilessh/langchain/venv/bin/pip\" show \"{{package}}\" >/dev/null 2>&1"
+    }
+  ],
+  "uninstall": [
+    {
+      "id": "uninstall",
+      "description": "Best-effort pip-uninstall the packages this plugin can install (from the shared venv).",
+      "run": "V=\"$HOME/.mobilessh/langchain/venv\"; test -x \"$V/bin/pip\" && \"$V/bin/pip\" uninstall -y langchain-ollama langchain-chroma langchain-qdrant langchain-community langchain-huggingface langchain-text-splitters langchain-unstructured langchain-postgres langchain-mongodb langchain-elasticsearch langchain-google-community langchain-experimental || true",
+      "continueOnError": true
+    }
+  ]
+}

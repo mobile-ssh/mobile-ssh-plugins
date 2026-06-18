@@ -1,0 +1,48 @@
+{
+  "description": "Run Langflow (official image) in Docker bound to loopback 127.0.0.1:7860. Reaches host Ollama via host.docker.internal — set the Ollama component Base URL to http://host.docker.internal:11434 (no cloud key).",
+  "requires": [
+    "docker"
+  ],
+  "steps": [
+    {
+      "id": "check-docker",
+      "description": "Verify Docker is installed.",
+      "run": "docker --version"
+    },
+    {
+      "id": "ollama",
+      "description": "Make sure the AI Chat plugin's Ollama is running on 127.0.0.1:11434 (start it if installed). Install the AI Chat plugin first if this reports it missing.",
+      "check": "curl -fsS http://127.0.0.1:11434/api/version >/dev/null 2>&1",
+      "run": "export PATH=\"$HOME/.local/bin:$PATH\"; if command -v ollama >/dev/null 2>&1; then export OLLAMA_HOST=127.0.0.1:11434; nohup ollama serve >/tmp/ollama.log 2>&1 & for i in $(seq 1 20); do curl -fsS http://127.0.0.1:11434/api/version >/dev/null 2>&1 && exit 0; sleep 1; done; fi; echo \"Ollama not reachable on 127.0.0.1:11434 — install/run the AI Chat plugin first (it sets up Ollama with no root).\"",
+      "continueOnError": true,
+      "timeoutMs": 40000
+    },
+    {
+      "id": "run",
+      "description": "Start the Langflow container bound to loopback 127.0.0.1:7860 (data in the Docker volume \"langflow\").",
+      "check": "docker ps --filter name=^/langflow$ --filter status=running -q | grep -q .",
+      "run": "docker rm -f langflow 2>/dev/null || true; docker run -d --name langflow --restart unless-stopped -p 127.0.0.1:7860:7860 --add-host=host.docker.internal:host-gateway -v langflow:/app/.langflow langflowai/langflow:latest",
+      "sudo": true,
+      "stream": true,
+      "timeoutMs": 900000,
+      "forwardPort": 7860
+    },
+    {
+      "id": "wait",
+      "description": "Wait for Langflow to start (first run runs DB migrations).",
+      "check": "curl -fsS http://127.0.0.1:7860/health >/dev/null 2>&1",
+      "run": "for i in $(seq 1 90); do curl -fsS http://127.0.0.1:7860/health >/dev/null 2>&1 && exit 0; sleep 2; done; echo \"Langflow still starting — give it a moment.\"",
+      "continueOnError": true,
+      "timeoutMs": 200000
+    }
+  ],
+  "uninstall": [
+    {
+      "id": "remove",
+      "description": "Stop and remove the Langflow container and its data volume.",
+      "run": "docker rm -f langflow 2>/dev/null || true; docker volume rm langflow 2>/dev/null || true",
+      "sudo": true,
+      "continueOnError": true
+    }
+  ]
+}

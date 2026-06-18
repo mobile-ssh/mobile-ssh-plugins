@@ -1,5 +1,5 @@
 {
-  "description": "Run Open WebUI (a full Ollama chat interface) in Docker on the remote. Uses host networking so it talks to your existing Ollama on 127.0.0.1:11434 with no Ollama reconfiguration; HOST=127.0.0.1 keeps it bound to the server's loopback (reached only over the SSH tunnel). Note: with host networking that loopback bind is enforced by the app honoring HOST, not by Docker. First launch: create an admin account in the browser.",
+  "description": "Run Open WebUI (a full Ollama chat interface) in Docker on the remote. It talks to a home-dir Ollama on 127.0.0.1:11434 — the same one the AI Chat plugin uses — so your pulled models appear automatically. If that Ollama isn't running this recipe starts it; if it isn't even installed, it downloads it into ~/.local (no root) so Open WebUI always has a model backend you can pull models into. Uses Docker host networking; HOST=127.0.0.1 keeps Open WebUI on the server's loopback (reached only over the SSH tunnel) — note: with --network=host that loopback bind is enforced by the app honoring HOST, not by Docker. First launch: create an admin account in the browser.",
   "requires": ["docker"],
   "steps": [
     {
@@ -8,17 +8,18 @@
       "run": "docker --version"
     },
     {
-      "id": "ollama-check",
-      "description": "Check Ollama is reachable on :11434 (Open WebUI connects to it).",
+      "id": "ollama",
+      "description": "Ensure a home-dir Ollama (the same one the AI Chat plugin uses) is running on 127.0.0.1:11434 — start it, or download it into ~/.local with no root if it isn't installed — so Open WebUI always has a model backend and your models appear automatically.",
       "check": "curl -fsS http://127.0.0.1:11434/api/version >/dev/null 2>&1",
-      "run": "echo 'Ollama not detected on 127.0.0.1:11434 — install the AI Chat plugin or start Ollama. You can also set the URL inside Open WebUI later.'",
-      "continueOnError": true
+      "run": "set -e; export PATH=\"$HOME/.local/bin:$PATH\"; if ! command -v ollama >/dev/null 2>&1; then echo 'Ollama not found — downloading it into ~/.local (no root)...'; mkdir -p \"$HOME/.local\"; case \"$(uname -m)\" in x86_64|amd64) A=amd64 ;; aarch64|arm64) A=arm64 ;; *) echo \"Unsupported architecture: $(uname -m)\" >&2; exit 1 ;; esac; command -v zstd >/dev/null 2>&1 || { echo \"Ollama ships as a .tar.zst archive and needs the 'zstd' tool. Install zstd (e.g. apt-get install zstd) or install the AI Chat plugin first.\" >&2; exit 1; }; TMP=$(mktemp); curl -fsSL \"https://ollama.com/download/ollama-linux-$A.tar.zst\" -o \"$TMP\"; zstd -dc \"$TMP\" | tar -xf - -C \"$HOME/.local\"; rm -f \"$TMP\"; fi; echo 'Starting Ollama on 127.0.0.1:11434...'; export OLLAMA_HOST=127.0.0.1:11434; mkdir -p \"$HOME/.local\"; nohup ollama serve >\"$HOME/.local/ollama.log\" 2>&1 & for i in $(seq 1 30); do curl -fsS http://127.0.0.1:11434/api/version >/dev/null 2>&1 && exit 0; sleep 1; done; echo 'Ollama did not become ready — Open WebUI will still start; install/run the AI Chat plugin or set the Ollama URL in Open WebUI admin settings.' >&2; tail -n 20 \"$HOME/.local/ollama.log\" >&2 2>/dev/null || true; exit 1",
+      "continueOnError": true,
+      "timeoutMs": 600000
     },
     {
       "id": "run",
-      "description": "Start the Open WebUI container bound to loopback 127.0.0.1:3000 (host networking → reaches host Ollama). First run pulls a multi-GB image.",
+      "description": "Start the Open WebUI container bound to loopback 127.0.0.1:3000 (host networking → reaches the home-dir Ollama; the loopback bind is enforced by Open WebUI honoring HOST=127.0.0.1, not by Docker). First run pulls a multi-GB image.",
       "check": "docker ps --filter name=open-webui --filter status=running -q | grep -q .",
-      "run": "docker rm -f open-webui 2>/dev/null || true; docker run -d --name open-webui --restart unless-stopped --network=host -e HOST=127.0.0.1 -e PORT=3000 -e OLLAMA_BASE_URL=http://127.0.0.1:11434 -v open-webui:/app/backend/data ghcr.io/open-webui/open-webui:main",
+      "run": "docker rm -f open-webui 2>/dev/null || true; docker run -d --name open-webui --restart unless-stopped --network=host -e HOST=127.0.0.1 -e PORT=3000 -e ENABLE_OLLAMA_API=true -e OLLAMA_BASE_URL=http://127.0.0.1:11434 -v open-webui:/app/backend/data ghcr.io/open-webui/open-webui:main",
       "sudo": true,
       "stream": true,
       "timeoutMs": 900000,

@@ -1,0 +1,48 @@
+{
+  "description": "Run Flowise in Docker bound to loopback 127.0.0.1:3000 (data in the Docker volume \"flowise\"). It reaches the host Ollama via host.docker.internal — set Ollama node Base URL to http://host.docker.internal:11434 inside Flowise (no cloud key).",
+  "requires": [
+    "docker"
+  ],
+  "steps": [
+    {
+      "id": "check-docker",
+      "description": "Verify Docker is installed.",
+      "run": "docker --version"
+    },
+    {
+      "id": "ollama",
+      "description": "Make sure the AI Chat plugin's Ollama is running on 127.0.0.1:11434 (start it if installed). Install the AI Chat plugin first if this reports it missing.",
+      "check": "curl -fsS http://127.0.0.1:11434/api/version >/dev/null 2>&1",
+      "run": "export PATH=\"$HOME/.local/bin:$PATH\"; if command -v ollama >/dev/null 2>&1; then export OLLAMA_HOST=127.0.0.1:11434; nohup ollama serve >/tmp/ollama.log 2>&1 & for i in $(seq 1 20); do curl -fsS http://127.0.0.1:11434/api/version >/dev/null 2>&1 && exit 0; sleep 1; done; fi; echo \"Ollama not reachable on 127.0.0.1:11434 — install/run the AI Chat plugin first (it sets up Ollama with no root).\"",
+      "continueOnError": true,
+      "timeoutMs": 40000
+    },
+    {
+      "id": "run",
+      "description": "Start the Flowise container bound to loopback 127.0.0.1:3000 (data persisted in the Docker volume \"flowise\").",
+      "check": "docker ps --filter name=^/flowise$ --filter status=running -q | grep -q .",
+      "run": "docker rm -f flowise 2>/dev/null || true; docker run -d --name flowise --restart unless-stopped -p 127.0.0.1:3000:3000 --add-host=host.docker.internal:host-gateway -v flowise:/root/.flowise flowiseai/flowise",
+      "sudo": true,
+      "stream": true,
+      "timeoutMs": 900000,
+      "forwardPort": 3000
+    },
+    {
+      "id": "wait",
+      "description": "Wait for Flowise to start.",
+      "check": "curl -fsS http://127.0.0.1:3000/ >/dev/null 2>&1",
+      "run": "for i in $(seq 1 60); do curl -fsS http://127.0.0.1:3000/ >/dev/null 2>&1 && exit 0; sleep 2; done; echo \"Flowise still starting — give it a moment.\"",
+      "continueOnError": true,
+      "timeoutMs": 150000
+    }
+  ],
+  "uninstall": [
+    {
+      "id": "remove",
+      "description": "Stop and remove the Flowise container and its data volume.",
+      "run": "docker rm -f flowise 2>/dev/null || true; docker volume rm flowise 2>/dev/null || true",
+      "sudo": true,
+      "continueOnError": true
+    }
+  ]
+}

@@ -34,7 +34,7 @@
         },
         {
           "path": "ui/i18n.js",
-          "sha256": "81e26ca00d7ce1d7658f14a929090d60953361c280c384bfd871d3b01cf406ac"
+          "sha256": "84d370e1d53b8cc952104c8b4ce7fa94e18dd826eaa10345762aba760c8ac9ef"
         },
         {
           "path": "ui/index.html",
@@ -75,7 +75,7 @@
         },
         {
           "path": "ui/i18n.js",
-          "sha256": "3aa557b4f9c15c7a42aa0027fbf9676ecb5405114c073a7bc32b0c8ab8ef09b4"
+          "sha256": "7b714ef0c2dcdf69ea2af6bd01ff6dad4bc85470d78ee3bcbc349cf8bec3d0cb"
         },
         {
           "path": "ui/index.html",
@@ -118,7 +118,7 @@
         },
         {
           "path": "ui/i18n.js",
-          "sha256": "0d3e0aa8413712f4b7cd4e720c12d197db30ec99aa3fffcd8a9db5a98ed00e71"
+          "sha256": "ad136d570fb746aaa45ed40fb45f1476fd9d4e29b3e9f2d3a5172180230b95e1"
         },
         {
           "path": "ui/index.html",
@@ -129,8 +129,8 @@
     {
       "id": "io.github.mobilessh.aichat",
       "name": "AI Chat",
-      "description": "Chat with a model running on the remote (Ollama) over a port forward — tokens stream live.",
-      "version": "1.0.0",
+      "description": "Chat with a model running on the remote (Ollama, installed in your home dir — no root needed) over a port forward — tokens stream live.",
+      "version": "1.1.0",
       "minBridgeVersion": "1.0.0",
       "role": "llm",
       "icon": "plugins/aichat/icon.svg",
@@ -149,19 +149,19 @@
         },
         {
           "path": "manifest.json",
-          "sha256": "b9491a9c00d7c64cb8a09ccecc4546fb4088a96aeb03fd8f67f43fd3d75040c9"
+          "sha256": "1ee7e979311ae51061e20c0bad7872ac48054e6d9506b8e8daee48c3621f6cdd"
         },
         {
           "path": "recipe.json",
-          "sha256": "d31ebacde2ea95466f7b9966f52220c92e3fa745ee7512f57bd415468634edb4"
+          "sha256": "6ba4e2ee72f3a28e8d0a673a532e783a1ed6acc5e903e3ba1c17701b9f87e360"
         },
         {
           "path": "ui/app.js",
-          "sha256": "afc9ba37d3cea2dac6a7768d26287f28d5b4a426ce8b42b4a6c47bc146155300"
+          "sha256": "6bb61ce1236db58eac53446f444ff77eef3fcccb20077229348cbf6f3e1d28f7"
         },
         {
           "path": "ui/i18n.js",
-          "sha256": "ef5220218643bc35f1a087229885cd841a7e3b6e606d3faa89d65600cee33198"
+          "sha256": "4d8a27e61f732b93104483ecbd586475b28f043355d46650440995e016fcbff2"
         },
         {
           "path": "ui/index.html",
@@ -170,10 +170,276 @@
       ]
     },
     {
+      "id": "io.github.mobilessh.chainlit",
+      "name": "Chainlit Chat",
+      "description": "Run a Chainlit chat app (LlamaIndex over local Ollama) on the remote, bound to loopback. Open its web UI in-app or in your browser. No cloud keys.",
+      "version": "0.1.0",
+      "minBridgeVersion": "1.0.0",
+      "role": "llm",
+      "icon": "plugins/chainlit/icon.svg",
+      "capabilities": [
+        "SSH_EXEC",
+        "TUNNEL"
+      ],
+      "sessionRequirement": "REQUIRES_ACTIVE_SESSION",
+      "path": "plugins/chainlit",
+      "files": [
+        {
+          "path": "icon.svg",
+          "sha256": "93584a098237794a4e8e1d66f0ad7f7af7412cca879b6b94174e1e5808110a88"
+        },
+        {
+          "path": "manifest.json",
+          "sha256": "b78b6b8b385f66f7808ff7bf542d14f51449c3489bc5090799ec899534c0a7c2"
+        },
+        {
+          "path": "recipe.json",
+          "sha256": "bc632e70df32a925bf2c63026170ed40bc49365c6696726215040f84d1bb9624"
+        },
+        {
+          "path": "ui/app.js",
+          "sha256": "cc9073e7675241daa61cd92c76b549270535a94f14608db84fe1b844ed263dd6"
+        },
+        {
+          "path": "ui/index.html",
+          "sha256": "d22a32c1386d622c3906b687fa25688f9da77eff0716cb1763e7de07b583bfef"
+        }
+      ]
+    },
+    {
+      "id": "io.github.mobilessh.dify",
+      "name": "Dify",
+      "description": "Self-host the Dify LLM-app platform (Docker Compose) on the remote, bound to loopback. Configure Ollama as the model provider for fully local apps. Heavy: pulls several containers.",
+      "version": "0.1.0",
+      "minBridgeVersion": "1.0.0",
+      "role": "llm",
+      "icon": "plugins/dify/icon.svg",
+      "capabilities": [
+        "SSH_EXEC",
+        "TUNNEL"
+      ],
+      "sessionRequirement": "REQUIRES_ACTIVE_SESSION",
+      "path": "plugins/dify",
+      "files": [
+        {
+          "path": "icon.svg",
+          "sha256": "76fd5223b4eb733611bb538c712fc7849df5acf968dbcd7f55c0213a6792556d"
+        },
+        {
+          "path": "manifest.json",
+          "sha256": "fc364099f64c379e64b8ac81d13a8fbdebcc69041c83cce87a165d1027948568"
+        },
+        {
+          "path": "recipe.json",
+          "sha256": "b70dff83834ab59ed02abc27ebd572c74688f9887bb90201af2bd0ac53ae5c35"
+        },
+        {
+          "path": "ui/app.js",
+          "sha256": "9e3056d9bbe21073a9891a01c222e0a6f84d53b4597f3c30814cd5f128d4186b"
+        },
+        {
+          "path": "ui/index.html",
+          "sha256": "77d59304ff801ddc5d0451bff9fc641ae081ecef41aaf3f91791d77be4639c35"
+        }
+      ]
+    },
+    {
+      "id": "io.github.mobilessh.flowise",
+      "name": "Flowise",
+      "description": "Visual LangChain/LlamaIndex agent & flow builder (Flowise) on the remote via Docker, bound to loopback. Point its Ollama nodes at your local model — no cloud keys.",
+      "version": "0.1.0",
+      "minBridgeVersion": "1.0.0",
+      "role": "llm",
+      "icon": "plugins/flowise/icon.svg",
+      "capabilities": [
+        "SSH_EXEC",
+        "TUNNEL"
+      ],
+      "sessionRequirement": "REQUIRES_ACTIVE_SESSION",
+      "path": "plugins/flowise",
+      "files": [
+        {
+          "path": "icon.svg",
+          "sha256": "8fac46c576bd275896385134bd99036b29aae2dfef5b7911850c65d7af89e1c4"
+        },
+        {
+          "path": "manifest.json",
+          "sha256": "050d16746df6e41e2e8c32248906b9f50cdf5eada817832a0ecaf00f3a6ffa18"
+        },
+        {
+          "path": "recipe.json",
+          "sha256": "cbc33f84f33ce689aea4af82c713f70ef47b791691d5ca4e536de433754eea0a"
+        },
+        {
+          "path": "ui/app.js",
+          "sha256": "3c104b49e21d96831e8eed8f4bfb62a1e2cd0896fa48195ffc0e5264301ffe67"
+        },
+        {
+          "path": "ui/index.html",
+          "sha256": "2e23662cb40de2b9f95c76d94313bb522dab061e22d8ea6069acb59ef5b00f05"
+        }
+      ]
+    },
+    {
+      "id": "io.github.mobilessh.langchainrag",
+      "name": "LangChain RAG",
+      "description": "Chat over your server files with a local LangChain retrieval app (Ollama LLM + embeddings, embedded Chroma). FastAPI on loopback — your documents and queries never leave the tunnel.",
+      "version": "0.1.0",
+      "minBridgeVersion": "1.0.0",
+      "role": "llm",
+      "icon": "plugins/langchainrag/icon.svg",
+      "capabilities": [
+        "SSH_EXEC",
+        "TUNNEL",
+        "HTTP_LOOPBACK",
+        "STORAGE"
+      ],
+      "sessionRequirement": "REQUIRES_ACTIVE_SESSION",
+      "path": "plugins/langchainrag",
+      "files": [
+        {
+          "path": "icon.svg",
+          "sha256": "05e66294b0077b50b2803ad84423590bc5b07c4fdb42c1472fced6f5fa908fd2"
+        },
+        {
+          "path": "manifest.json",
+          "sha256": "c651ffad6762c38cd136a93b5d5e309e7d3861990bdd955e459d9ae94c7c17c3"
+        },
+        {
+          "path": "recipe.json",
+          "sha256": "10c7808362b7b878ab129f315cdf2b7819f16cd120b6866b2ecfb80abc928b35"
+        },
+        {
+          "path": "ui/app.js",
+          "sha256": "7d8f9bdbac02470fb0279a159c418311fe086aa7a865ea8c01bf38b74a74ab0f"
+        },
+        {
+          "path": "ui/index.html",
+          "sha256": "3515ccf664f79fce50b0f8aaef97e2830cf74edd52584626c8091e4452870366"
+        }
+      ]
+    },
+    {
+      "id": "io.github.mobilessh.langflow",
+      "name": "Langflow",
+      "description": "Visual LangChain flow builder (Langflow) on the remote via Docker, bound to loopback. Uses native Ollama components against your local model — no cloud keys.",
+      "version": "0.1.0",
+      "minBridgeVersion": "1.0.0",
+      "role": "llm",
+      "icon": "plugins/langflow/icon.svg",
+      "capabilities": [
+        "SSH_EXEC",
+        "TUNNEL"
+      ],
+      "sessionRequirement": "REQUIRES_ACTIVE_SESSION",
+      "path": "plugins/langflow",
+      "files": [
+        {
+          "path": "icon.svg",
+          "sha256": "ee93402d610bc6b142b4a22438d706cd4532e64dd7d9667420f406129c2d5cbd"
+        },
+        {
+          "path": "manifest.json",
+          "sha256": "765fb9ac9a4c169dbfc89b3eb3b7d89e882afba45ecdbc37f9fe0e2a280b6a60"
+        },
+        {
+          "path": "recipe.json",
+          "sha256": "d9e784f68174996884242b2ca54ec93130a8114661413881ed0f86868b2a05e5"
+        },
+        {
+          "path": "ui/app.js",
+          "sha256": "10933822f9ccfc267bc4daa0772d8eb1d443d47b20140fababf6cd4cee99bcde"
+        },
+        {
+          "path": "ui/index.html",
+          "sha256": "0a550fb65b2ecb9a20e31306947c64dce6643dc018175a9c7d421861d150ec9d"
+        }
+      ]
+    },
+    {
+      "id": "io.github.mobilessh.llamaagents",
+      "name": "LlamaIndex Agents",
+      "description": "Run LlamaIndex agent workflows as a loopback service (llama-agents) on local Ollama. Kick off a workflow from your phone and get an ntfy push when it finishes. Experimental.",
+      "version": "0.1.0",
+      "minBridgeVersion": "1.0.0",
+      "role": "llm",
+      "icon": "plugins/llamaagents/icon.svg",
+      "capabilities": [
+        "SSH_EXEC",
+        "TUNNEL",
+        "HTTP_LOOPBACK",
+        "STORAGE",
+        "NOTIFICATIONS"
+      ],
+      "sessionRequirement": "REQUIRES_ACTIVE_SESSION",
+      "path": "plugins/llamaagents",
+      "files": [
+        {
+          "path": "icon.svg",
+          "sha256": "d26d3438d6bd4a10361a079f0d1e5a0a9de4aa3a542c1d3dab42cb8e06b55a2a"
+        },
+        {
+          "path": "manifest.json",
+          "sha256": "36d3d20304a0cbb4dfb00b930ba3b49ed0aacc9515f1398c8e4a0309078881c5"
+        },
+        {
+          "path": "recipe.json",
+          "sha256": "c595887ad00f39baddaed165746bfffaa3e6bc0180b51d80f283e1c5d18d08c5"
+        },
+        {
+          "path": "ui/app.js",
+          "sha256": "cf4e55c82dfec5eb97957103cfcb09525b03d5d98153ad16bf683d4d1897829e"
+        },
+        {
+          "path": "ui/index.html",
+          "sha256": "a228155322861d677028f58da1936e7853ae6936ad63040069cf095c12dc115a"
+        }
+      ]
+    },
+    {
+      "id": "io.github.mobilessh.llamaindexrag",
+      "name": "LlamaIndex RAG",
+      "description": "Chat over your own files on the server: a local LlamaIndex + FastAPI RAG service (Ollama LLM + embeddings, embedded LanceDB). No cloud, no API keys — data stays on the tunnel.",
+      "version": "0.1.0",
+      "minBridgeVersion": "1.0.0",
+      "role": "llm",
+      "icon": "plugins/llamaindexrag/icon.svg",
+      "capabilities": [
+        "SSH_EXEC",
+        "TUNNEL",
+        "HTTP_LOOPBACK",
+        "STORAGE"
+      ],
+      "sessionRequirement": "REQUIRES_ACTIVE_SESSION",
+      "path": "plugins/llamaindexrag",
+      "files": [
+        {
+          "path": "icon.svg",
+          "sha256": "fa08e4c7245be3c6143bb230cdc2833c20440e5cd783256a92f0cabb7fe32322"
+        },
+        {
+          "path": "manifest.json",
+          "sha256": "6ffaceacfb93b7e3768400364c50b67e8e4be908c1134ee53288d73950476aec"
+        },
+        {
+          "path": "recipe.json",
+          "sha256": "7069d341e26ed69ae04210b57826e5dc39490e8a738c8febb0bc2d84a34e32b1"
+        },
+        {
+          "path": "ui/app.js",
+          "sha256": "9ba3b00bb5d185f9e1555e2ed966ba46a1c8d2731d086fa4cb8e9ca7527297e5"
+        },
+        {
+          "path": "ui/index.html",
+          "sha256": "e565e9b64454267e565189016d44dda61c17153138dd9d54ecb2ff4e0a1eebf5"
+        }
+      ]
+    },
+    {
       "id": "io.github.mobilessh.openwebui",
       "name": "Open WebUI",
-      "description": "Full chat web UI for Ollama (Open WebUI) on the remote — open it in-app or in your phone's browser. Reuses your existing Ollama models.",
-      "version": "1.0.0",
+      "description": "Full chat web UI for Ollama (Open WebUI) on the remote — open it in-app or in your phone's browser. Reuses the AI Chat plugin's Ollama and models (sets one up automatically if needed).",
+      "version": "1.1.0",
       "minBridgeVersion": "1.0.0",
       "role": "llm",
       "icon": "plugins/openwebui/icon.svg",
@@ -190,23 +456,211 @@
         },
         {
           "path": "manifest.json",
-          "sha256": "a4c7311f88df088954f25e336962441551c4670b398b9be24e530225a3462e06"
+          "sha256": "033c21169d2f6f876b7e3f2e3d79f99641ae9d1f0267e05b33005dba02ceb54e"
         },
         {
           "path": "recipe.json",
-          "sha256": "433893d1b94a53393d9893dadb071a7a55b220b1b834cbcd341b9653c5b23fdb"
+          "sha256": "307b31ab4ddc7eddd55c728a004c11d6d109ace0e3ed604ea166e1fb0e37c597"
         },
         {
           "path": "ui/app.js",
-          "sha256": "e252c5c4908e65e8eda4688dd4e99d7b9ea7daf88256c7413a5f5be9b0c28eae"
+          "sha256": "626e715d9c7c64639296977f9869cbef4bab51de903c00c11e0986b8b2f806e0"
         },
         {
           "path": "ui/i18n.js",
-          "sha256": "d42e964b6ab1f420185dd301a07e4daf3ecda4c721437a4f14804565f21458db"
+          "sha256": "28458cb630af90922718e5c6bdd8883a4c3707cebb88368fded3888a19d46b4e"
         },
         {
           "path": "ui/index.html",
-          "sha256": "4150d31a4135f6211399153d4e7657493a58403922461b2d023e3552cce3a17d"
+          "sha256": "abc5031133e88b19a8024f6b95ca1a34023f4ec719a2a14b1117d7fd8ac27b48"
+        }
+      ]
+    },
+    {
+      "id": "io.github.mobilessh.pipelines",
+      "name": "OpenAI Pipelines",
+      "description": "Run LangChain/LlamaIndex logic as OpenAI-compatible models (Open WebUI Pipelines) on the remote, bound to loopback. Chat here via /v1/chat/completions or pair with Open WebUI. No cloud keys.",
+      "version": "0.1.0",
+      "minBridgeVersion": "1.0.0",
+      "role": "llm",
+      "icon": "plugins/pipelines/icon.svg",
+      "capabilities": [
+        "SSH_EXEC",
+        "TUNNEL",
+        "HTTP_LOOPBACK",
+        "STORAGE"
+      ],
+      "sessionRequirement": "REQUIRES_ACTIVE_SESSION",
+      "path": "plugins/pipelines",
+      "files": [
+        {
+          "path": "icon.svg",
+          "sha256": "cefe7faa9080bb3e2859f30f0fa627af22753e3182e5851b5e5be9ef57436213"
+        },
+        {
+          "path": "manifest.json",
+          "sha256": "ca1d524db342ecede7f5636ff3cc21d647392fc0e0c56eb3c7daf9420f374040"
+        },
+        {
+          "path": "recipe.json",
+          "sha256": "6fd652740cbd14309be4e5d73f82b0402275c46e7cbbfd98878973a822a3645c"
+        },
+        {
+          "path": "ui/app.js",
+          "sha256": "664d8915d44c19ef7f17cb7e2c9942a45016adb70a4e87b4335c80ea3bf09be3"
+        },
+        {
+          "path": "ui/index.html",
+          "sha256": "33b8d89287b780808eb6015ba9c33b38f72a01c1fb273d4c396e30c4459510b5"
+        }
+      ]
+    },
+    {
+      "id": "io.github.mobilessh.chroma",
+      "name": "Chroma",
+      "description": "Run a Chroma vector database on the remote via Docker, bound to loopback (REST API + /docs). A backing store for LangChain/LlamaIndex RAG. Fully offline, no cloud.",
+      "version": "0.1.0",
+      "minBridgeVersion": "1.0.0",
+      "role": "other",
+      "icon": "plugins/chroma/icon.svg",
+      "capabilities": [
+        "SSH_EXEC",
+        "TUNNEL",
+        "HTTP_LOOPBACK"
+      ],
+      "sessionRequirement": "REQUIRES_ACTIVE_SESSION",
+      "path": "plugins/chroma",
+      "files": [
+        {
+          "path": "icon.svg",
+          "sha256": "58b8477ef67585fe58bac749c783fc6450eec0727a825b0803b8ba21b16b6c73"
+        },
+        {
+          "path": "manifest.json",
+          "sha256": "c2be5055edcbc710170efe3b563c39d1afff4f03f383efcb788fa5337043237d"
+        },
+        {
+          "path": "recipe.json",
+          "sha256": "d51c6cb45c125127e5fc55539de8893b1a8c84576a3ea37e42862dc19cc143b5"
+        },
+        {
+          "path": "ui/app.js",
+          "sha256": "b2e17696e892d8b788cf161f51ccc7b25e0e8e091b6d667014ca90ba8d28b15c"
+        },
+        {
+          "path": "ui/index.html",
+          "sha256": "59662aa226f95ba4be5086fe25b500324583c1fac699922be6d987609850c79e"
+        }
+      ]
+    },
+    {
+      "id": "io.github.mobilessh.langchainintegrations",
+      "name": "LangChain Integrations",
+      "description": "Browse common LangChain integration packages and install one on the server (pip) into the LangChain RAG venv. Commands are shown for consent before they run.",
+      "version": "0.1.0",
+      "minBridgeVersion": "1.0.0",
+      "role": "other",
+      "icon": "plugins/langchainintegrations/icon.svg",
+      "capabilities": [
+        "SSH_EXEC",
+        "STORAGE"
+      ],
+      "sessionRequirement": "REQUIRES_ACTIVE_SESSION",
+      "path": "plugins/langchainintegrations",
+      "files": [
+        {
+          "path": "icon.svg",
+          "sha256": "6b42cb447c43ef9bc373136b70eb4094920037436c5bc438f9e11ed280a656f6"
+        },
+        {
+          "path": "manifest.json",
+          "sha256": "f7d59a3558014a4f4f53e2a62299f63b01b8c716788f7d141a4b67d631cc8668"
+        },
+        {
+          "path": "recipe.json",
+          "sha256": "e5cf7538ba67021f632d5e014035dae3fbb70c0fb08896d159b1a4fe63c251a0"
+        },
+        {
+          "path": "ui/app.js",
+          "sha256": "5de7fc915a44d452c930bc77b7bf69d17b6d25b2bc032fc6ccf2dbd568393a82"
+        },
+        {
+          "path": "ui/index.html",
+          "sha256": "68f16cb1172e30e33471b2dc0b846feaf0bfa107c40c608309d3d1d84cf0d772"
+        }
+      ]
+    },
+    {
+      "id": "io.github.mobilessh.llamahub",
+      "name": "LlamaHub Loaders",
+      "description": "Browse popular LlamaHub data loaders & packs and install one on the server (pip) into the LlamaIndex RAG venv. Commands are shown for consent before they run.",
+      "version": "0.1.0",
+      "minBridgeVersion": "1.0.0",
+      "role": "other",
+      "icon": "plugins/llamahub/icon.svg",
+      "capabilities": [
+        "SSH_EXEC",
+        "STORAGE"
+      ],
+      "sessionRequirement": "REQUIRES_ACTIVE_SESSION",
+      "path": "plugins/llamahub",
+      "files": [
+        {
+          "path": "icon.svg",
+          "sha256": "14d04455a875efd10c9c2bd482d88d1ca6e48b805f4ff9cf18d436041d22ea7f"
+        },
+        {
+          "path": "manifest.json",
+          "sha256": "a9b57b7de88fde9b1773a380700a605770036b1c8c883e9b07141fd2774e8ee8"
+        },
+        {
+          "path": "recipe.json",
+          "sha256": "8dbb9220c71e6550fd5e7450d63fd321317257c170e0501af135d6af88d2bcaa"
+        },
+        {
+          "path": "ui/app.js",
+          "sha256": "69b66ce3f0e81bebf6ae5b649eb26369dc7c009d512d0b6236b41062448a235f"
+        },
+        {
+          "path": "ui/index.html",
+          "sha256": "5ae2a9f44e9521377bdd8486dc93da7ba43b9c24c49ef34a3ad97a4519e87143"
+        }
+      ]
+    },
+    {
+      "id": "io.github.mobilessh.qdrant",
+      "name": "Qdrant",
+      "description": "Run a Qdrant vector database on the remote via Docker, bound to loopback with telemetry disabled. Web dashboard + REST API for LangChain/LlamaIndex RAG. Fully offline.",
+      "version": "0.1.0",
+      "minBridgeVersion": "1.0.0",
+      "role": "other",
+      "icon": "plugins/qdrant/icon.svg",
+      "capabilities": [
+        "SSH_EXEC",
+        "TUNNEL"
+      ],
+      "sessionRequirement": "REQUIRES_ACTIVE_SESSION",
+      "path": "plugins/qdrant",
+      "files": [
+        {
+          "path": "icon.svg",
+          "sha256": "96c700cf02b8725b3614047aa77e26e965d6557dedf2ab6f8f41829f9296943b"
+        },
+        {
+          "path": "manifest.json",
+          "sha256": "12e6591a53d538a6eef02ce5163d33e4f5017aba58fa57b5ab97ab60ceb3b0a9"
+        },
+        {
+          "path": "recipe.json",
+          "sha256": "1940d4bdae374346ff4990df1ca1f2c881e21c8cd68d6da4844f34164e4972bf"
+        },
+        {
+          "path": "ui/app.js",
+          "sha256": "1b51ed603b64334cdd6ef8aeb19786e78bd7c6bde8daff8a55e9d9de09a388aa"
+        },
+        {
+          "path": "ui/index.html",
+          "sha256": "6c8bec8a818c5cc29292ece8304d04fd6a44165730c0c38687531b4284231028"
         }
       ]
     },
@@ -243,7 +697,7 @@
         },
         {
           "path": "ui/i18n.js",
-          "sha256": "5d342d3c20fdecb012eaa7f4c62d2cc11b53699f031e0a481eb3b8285bce0362"
+          "sha256": "e0596306ad1b280ee42a34aed375eb778749b2b9389575a0231a8b2f19efa7a8"
         },
         {
           "path": "ui/index.html",

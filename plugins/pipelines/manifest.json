@@ -1,0 +1,32 @@
+{
+  "id": "io.github.mobilessh.pipelines",
+  "name": "OpenAI Pipelines",
+  "category": "llm",
+  "description": "Run LangChain/LlamaIndex logic as OpenAI-compatible models (Open WebUI Pipelines) on the remote, bound to loopback. Chat here via /v1/chat/completions or pair with Open WebUI. No cloud keys.",
+  "version": "0.1.0",
+  "minBridgeVersion": "1.0.0",
+  "author": "Mobile SSH",
+  "icon": "icon.svg",
+  "ui": {
+    "entry": "ui/index.html"
+  },
+  "sessionRequirement": "REQUIRES_ACTIVE_SESSION",
+  "capabilities": [
+    "SSH_EXEC",
+    "TUNNEL",
+    "HTTP_LOOPBACK",
+    "STORAGE"
+  ],
+  "tunnel": {
+    "port": 9099
+  },
+  "settings": [
+    {
+      "key": "apiKey",
+      "label": "Pipelines API key",
+      "type": "secret",
+      "default": "0p3n-w3bu!",
+      "help": "Bearer token sent to the Pipelines server (default 0p3n-w3bu!)."
+    }
+  ]
+}
