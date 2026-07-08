@@ -16,21 +16,28 @@
   })();
 
   document.getElementById('setup').onclick = async function () {
-    var btn = this; btn.disabled = true;
+    var btn = this;
+    btn.disabled = true;
+    btn.textContent = t('installing');       // visible in-progress state on the button itself
+    var nextLabel = t('setup_btn');          // what to show again if setup didn't complete
     try {
       log(t('setup_msg'));
       var res = await MobileSSH.recipe.run();
-      if (!res.ok) { log(t('setup_failed')); btn.disabled = false; return; }
+      if (!res.ok) { log(t('setup_failed')); return; }
       tunnel = await MobileSSH.tunnel.open({ port: 8081 });
       log(t('reachable_at', tunnel.url));
       log(t('first_time'));
       openBtn.classList.remove('hidden');
       openExtBtn.classList.remove('hidden');
-      btn.textContent = t('rerun');
+      nextLabel = t('rerun');                // success → offer a re-run
     } catch (e) {
       log(t('error', e.message));
+    } finally {
+      // Always clear the in-progress state, even if a step threw — the button must never get
+      // stuck disabled/"Installing…" once the run has finished.
+      btn.textContent = nextLabel;
+      btn.disabled = false;
     }
-    btn.disabled = false;
   };
 
   openBtn.onclick = function () { if (tunnel) MobileSSH.ui.openService(tunnel.url); };

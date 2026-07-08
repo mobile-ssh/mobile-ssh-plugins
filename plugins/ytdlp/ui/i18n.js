@@ -6,6 +6,7 @@
     en: {
       desc:         'Runs MeTube — a yt-dlp web UI — in Docker on the remote, bound to loopback. Paste a video or playlist URL in the web UI; files download on the server (into ~/yt-dlp-downloads, merged to mp4).',
       setup_btn:    'Install & start MeTube',
+      installing:   'Installing…',
       open_btn:     'Open MeTube',
       open_ext:     'Open in browser ↗',
       ready:        'Ready.',

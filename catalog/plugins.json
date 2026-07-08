@@ -693,11 +693,11 @@
         },
         {
           "path": "ui/app.js",
-          "sha256": "26e64003264e9bdf5982cfb8ba0aaa53d1f0b6d3f7597cf28dd6a0b028a37a41"
+          "sha256": "f5b27ef9d81cab3842e9d7e95c8596bc869bdb51c826e792dd432b5c3f483aed"
         },
         {
           "path": "ui/i18n.js",
-          "sha256": "e0596306ad1b280ee42a34aed375eb778749b2b9389575a0231a8b2f19efa7a8"
+          "sha256": "415d5c2fbf576d4a5aa5d60a67a01404e13f6ea54e32000ce6781aaf5e9a8512"
         },
         {
           "path": "ui/index.html",
