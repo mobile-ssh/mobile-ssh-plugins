@@ -84,6 +84,114 @@
       ]
     },
     {
+      "id": "io.github.mobilessh.claudecode",
+      "name": "Claude Code CLI",
+      "description": "Install Anthropic's Claude Code — an agentic coding CLI — on the remote, no root needed. Run `claude` in the terminal (best inside tmux); first run signs in with your Claude account or API key.",
+      "version": "1.0.0",
+      "minBridgeVersion": "1.0.0",
+      "role": "terminal",
+      "icon": "plugins/claudecode/icon.svg",
+      "capabilities": [
+        "SSH_EXEC"
+      ],
+      "sessionRequirement": "REQUIRES_ACTIVE_SESSION",
+      "path": "plugins/claudecode",
+      "files": [
+        {
+          "path": "icon.svg",
+          "sha256": "3da907b62b315b69e5b97ce1903b8b6f9d6a45790c5ab7c8054ddb24e0ac0f3d"
+        },
+        {
+          "path": "manifest.json",
+          "sha256": "65da88bdd1b36cbc60ee3952472e305ef088dc1399b3952bc77cec2b202b8948"
+        },
+        {
+          "path": "recipe.json",
+          "sha256": "107918ab3d04891c98f61f053fb3fe276903ba97acecef625e4eb95ed55f5a67"
+        },
+        {
+          "path": "ui/app.js",
+          "sha256": "0c103c7220ad203177dfce7d6a379d068380161ac9247a02ad46cf29e6881316"
+        },
+        {
+          "path": "ui/index.html",
+          "sha256": "a0f0dbff11334bc1b1d20dc0f7877e08007a20f86e38f56b9080a5f764045ca6"
+        }
+      ]
+    },
+    {
+      "id": "io.github.mobilessh.codexcli",
+      "name": "Codex CLI",
+      "description": "Install OpenAI's Codex CLI — an agentic coding assistant — on the remote, no root needed. Run `codex` in the terminal (best inside tmux); first run signs in with ChatGPT or an API key.",
+      "version": "1.0.0",
+      "minBridgeVersion": "1.0.0",
+      "role": "terminal",
+      "icon": "plugins/codexcli/icon.svg",
+      "capabilities": [
+        "SSH_EXEC"
+      ],
+      "sessionRequirement": "REQUIRES_ACTIVE_SESSION",
+      "path": "plugins/codexcli",
+      "files": [
+        {
+          "path": "icon.svg",
+          "sha256": "a08fc340da744fc9184ddbeba0533fc26491b4c60b8463a7725b822266f1aa56"
+        },
+        {
+          "path": "manifest.json",
+          "sha256": "5db104334a5c760b339324a427a9b46613b3447743641d9ac8e4418129271780"
+        },
+        {
+          "path": "recipe.json",
+          "sha256": "3f57505c757a4a0c3b26d29908ac12d9582027fc9800de621df7f67f4bf31f5d"
+        },
+        {
+          "path": "ui/app.js",
+          "sha256": "3a2b5b38deae96004e58f4a64c5fe746340f25af28d915166c4f7dfeea3fcb58"
+        },
+        {
+          "path": "ui/index.html",
+          "sha256": "4bbca2b1ed5be123023db0543adba207bc437d045d378fb6e826c2d908caa1ac"
+        }
+      ]
+    },
+    {
+      "id": "io.github.mobilessh.geminicli",
+      "name": "Gemini CLI",
+      "description": "Install Google's Gemini CLI — an open-source terminal AI agent — on the remote, no root needed. Run `gemini` in the terminal (best inside tmux); first run signs in with Google or an API key.",
+      "version": "1.0.0",
+      "minBridgeVersion": "1.0.0",
+      "role": "terminal",
+      "icon": "plugins/geminicli/icon.svg",
+      "capabilities": [
+        "SSH_EXEC"
+      ],
+      "sessionRequirement": "REQUIRES_ACTIVE_SESSION",
+      "path": "plugins/geminicli",
+      "files": [
+        {
+          "path": "icon.svg",
+          "sha256": "ce3f340f79b72100a11d578cc3a79ab680d781cb155cdd323c8bdb97be8f7227"
+        },
+        {
+          "path": "manifest.json",
+          "sha256": "ff0236bd08048812f80f3adaff30c45876e446cb15cb8c32bfc38059978379cd"
+        },
+        {
+          "path": "recipe.json",
+          "sha256": "d3a4b20307c1d265291cbeb3076f0ed8da0a18bbb7a5917f73f1831c4e559430"
+        },
+        {
+          "path": "ui/app.js",
+          "sha256": "539801e2ca3ad2d1304d1b624c5d7cefbfb1d62d0a9f813b33253a887ac20451"
+        },
+        {
+          "path": "ui/index.html",
+          "sha256": "dd66896f893f2df6bcd60f768423ada258732d5e5a348b49ef9a2ab296bc1dc4"
+        }
+      ]
+    },
+    {
       "id": "io.github.mobilessh.vscode",
       "name": "VS Code",
       "description": "Run VS Code (code-server) on the remote host and open it on your phone. Run agents in its terminal.",

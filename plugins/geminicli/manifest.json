@@ -1,0 +1,19 @@
+{
+  "id": "io.github.mobilessh.geminicli",
+  "name": "Gemini CLI",
+  "description": "Install Google's Gemini CLI — an open-source terminal AI agent — on the remote, no root needed. Run `gemini` in the terminal (best inside tmux); first run signs in with Google or an API key.",
+  "version": "1.0.0",
+  "minBridgeVersion": "1.0.0",
+  "category": "terminal",
+  "icon": "icon.svg",
+  "author": "Mobile SSH",
+  "homepage": "https://github.com/google-gemini/gemini-cli",
+  "capabilities": [
+    "SSH_EXEC"
+  ],
+  "sessionRequirement": "REQUIRES_ACTIVE_SESSION",
+  "ui": {
+    "entry": "ui/index.html"
+  },
+  "recipe": "recipe.json"
+}

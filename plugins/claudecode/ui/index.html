@@ -1,0 +1,26 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Claude Code CLI</title>
+  <style>
+    body { margin:0; font:16px/1.45 system-ui,sans-serif; background:#1a1a2e; color:#eee; padding:16px;
+           padding-bottom:max(16px,env(safe-area-inset-bottom)); }
+    h1 { font-size:18px; margin:0 0 4px; }
+    p { color:#aaa; margin:4px 0 14px; font-size:14px; }
+    code { background:#23233a; padding:1px 5px; border-radius:5px; }
+    button { width:100%; padding:14px; margin:6px 0; border:0; border-radius:10px; background:#D97757; color:#fff; font-size:16px; }
+    button:disabled { opacity:.5; }
+    pre { background:#23233a; padding:10px; border-radius:8px; white-space:pre-wrap; word-break:break-word; font-size:12px; max-height:40vh; overflow:auto; }
+  </style>
+</head>
+<body>
+  <h1>Claude Code CLI</h1>
+  <p>Install Anthropic's Claude Code — an agentic coding CLI — on the remote (no root; user-local Node.js if needed). After installing, go back to the terminal (‹) and run <code>claude</code> —
+     best inside tmux so it keeps working if the connection drops.</p>
+  <button id="setup">Install Claude Code CLI</button>
+  <pre id="log">Ready.</pre>
+  <script src="./app.js"></script>
+</body>
+</html>

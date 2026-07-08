@@ -1,0 +1,29 @@
+{
+  "description": "Install the Claude Code CLI (@anthropic-ai/claude-code) into ~/.npm-global on the remote — no root. Installs a user-local Node.js 22 under ~/.local/node first if the server has no Node 20+. Adds both to PATH via ~/.bashrc.",
+  "steps": [
+    {
+      "id": "node",
+      "description": "Install a user-local Node.js 22 under ~/.local/node (skipped if Node 20+ is already available).",
+      "check": "export PATH=\"$HOME/.npm-global/bin:$HOME/.local/node/bin:$PATH\"; node -e 'process.exit(parseInt(process.versions.node)>=20?0:1)' 2>/dev/null",
+      "run": "set -e; ARCH=$(uname -m); case \"$ARCH\" in x86_64) A=x64;; aarch64|arm64) A=arm64;; *) echo \"Unsupported arch: $ARCH\"; exit 1;; esac; V=v22.14.0; cd /tmp; curl -fsSL \"https://nodejs.org/dist/$V/node-$V-linux-$A.tar.gz\" -o node.tgz; rm -rf \"$HOME/.local/node\"; mkdir -p \"$HOME/.local/node\"; tar -xzf node.tgz -C \"$HOME/.local/node\" --strip-components=1; rm -f node.tgz; grep -q '.local/node/bin' \"$HOME/.bashrc\" 2>/dev/null || echo 'export PATH=\"$HOME/.npm-global/bin:$HOME/.local/node/bin:$PATH\"' >> \"$HOME/.bashrc\"; \"$HOME/.local/node/bin/node\" --version",
+      "stream": true,
+      "timeoutMs": 600000
+    },
+    {
+      "id": "install",
+      "description": "Install @anthropic-ai/claude-code into ~/.npm-global (user-level npm prefix, no sudo).",
+      "check": "export PATH=\"$HOME/.npm-global/bin:$HOME/.local/node/bin:$PATH\"; command -v claude",
+      "run": "export PATH=\"$HOME/.npm-global/bin:$HOME/.local/node/bin:$PATH\"; npm config set prefix \"$HOME/.npm-global\"; npm install -g @anthropic-ai/claude-code; grep -q '.npm-global/bin' \"$HOME/.bashrc\" 2>/dev/null || echo 'export PATH=\"$HOME/.npm-global/bin:$PATH\"' >> \"$HOME/.bashrc\"; claude --version || true",
+      "stream": true,
+      "timeoutMs": 900000
+    }
+  ],
+  "uninstall": [
+    {
+      "id": "remove",
+      "description": "Uninstall @anthropic-ai/claude-code (your Node.js under ~/.local/node is kept).",
+      "run": "export PATH=\"$HOME/.npm-global/bin:$HOME/.local/node/bin:$PATH\"; npm uninstall -g @anthropic-ai/claude-code 2>/dev/null || true",
+      "continueOnError": true
+    }
+  ]
+}

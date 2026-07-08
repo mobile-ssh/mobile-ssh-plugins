@@ -1,0 +1,19 @@
+{
+  "id": "io.github.mobilessh.claudecode",
+  "name": "Claude Code CLI",
+  "description": "Install Anthropic's Claude Code — an agentic coding CLI — on the remote, no root needed. Run `claude` in the terminal (best inside tmux); first run signs in with your Claude account or API key.",
+  "version": "1.0.0",
+  "minBridgeVersion": "1.0.0",
+  "category": "terminal",
+  "icon": "icon.svg",
+  "author": "Mobile SSH",
+  "homepage": "https://github.com/anthropics/claude-code",
+  "capabilities": [
+    "SSH_EXEC"
+  ],
+  "sessionRequirement": "REQUIRES_ACTIVE_SESSION",
+  "ui": {
+    "entry": "ui/index.html"
+  },
+  "recipe": "recipe.json"
+}
