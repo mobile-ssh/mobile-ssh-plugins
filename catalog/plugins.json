@@ -662,6 +662,39 @@
       ]
     },
     {
+      "id": "io.github.mobilessh.daytona",
+      "name": "Daytona Desktop",
+      "description": "Run a Daytona cloud sandbox desktop from your phone: full noVNC screen, or tap-to-click Computer Use. Sends your Daytona API key and input to app.daytona.io.",
+      "version": "1.0.0",
+      "minBridgeVersion": "1.0.0",
+      "role": "other",
+      "icon": "plugins/daytona/icon.svg",
+      "capabilities": [
+        "HTTP_INTERNET",
+        "STORAGE"
+      ],
+      "sessionRequirement": "STANDALONE",
+      "path": "plugins/daytona",
+      "files": [
+        {
+          "path": "icon.svg",
+          "sha256": "beec88e358ddb46686dc5a0bc525e5b1fd4ba815ce30ccd7f806882ca80eb127"
+        },
+        {
+          "path": "manifest.json",
+          "sha256": "08c10c11bb7ccbc969a12a76083a12b6755044cb356e5d78531be5fe0e51159c"
+        },
+        {
+          "path": "ui/app.js",
+          "sha256": "d23308d100a533d33cb152b0e28225dadfc45248bb4ccfaa53b3d15bff8a01de"
+        },
+        {
+          "path": "ui/index.html",
+          "sha256": "8778a4869ef04286de6af861ff12532b355e0e2a0212fdb7055402e7b41bedeb"
+        }
+      ]
+    },
+    {
       "id": "io.github.mobilessh.langchainintegrations",
       "name": "LangChain Integrations",
       "description": "Browse common LangChain integration packages and install one on the server (pip) into the LangChain RAG venv. Commands are shown for consent before they run.",

@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Daytona Desktop</title>
+    <style>
+      :root { --accent:#00794a; --bg:#1a1a2e; --surface:#23233a; --text:#eee; }
+      * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+      body { margin:0; font:16px/1.45 system-ui,sans-serif; background:var(--bg); color:var(--text); padding:16px; padding-bottom:max(16px,env(safe-area-inset-bottom)); }
+      h1 { font-size:18px; margin:0 0 4px; }
+      p { color:#aaa; margin:4px 0 14px; font-size:14px; }
+      button { width:100%; padding:14px; margin:6px 0; border:0; border-radius:10px; background:var(--accent); color:#fff; font-size:16px; }
+      button.secondary { background:#3a3a52; }
+      button:disabled { opacity:.5; }
+      input { width:100%; padding:13px; margin:6px 0; border:1px solid #3a3a52; border-radius:10px; background:var(--surface); color:var(--text); font-size:16px; }
+      pre { background:var(--surface); padding:10px; border-radius:8px; white-space:pre-wrap; word-break:break-word; font-size:12px; max-height:34vh; overflow:auto; }
+      .hidden { display:none; }
+      .note { background:var(--surface); border-left:3px solid var(--accent); border-radius:8px; padding:10px; margin:10px 0; font-size:13px; color:#ccc; }
+      .note b { color:var(--text); }
+
+      /* Sandbox list */
+      .box { background:var(--surface); border-radius:10px; padding:12px; margin:8px 0; }
+      .box h2 { font-size:14px; margin:0 0 2px; font-family:ui-monospace,monospace; word-break:break-all; }
+      .box .meta { font-size:12px; color:#9a9ab0; margin-bottom:8px; }
+      .row { display:flex; gap:8px; }
+      .row button { margin:0; padding:10px; font-size:14px; }
+      .dot { display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:6px; vertical-align:1px; background:#7a7a90; }
+      .dot.on { background:#00d47e; }
+      .dot.busy { background:#e0a800; }
+
+      /* Remote screen */
+      #screen { width:100%; height:auto; display:block; border-radius:8px; background:#000; touch-action:none; user-select:none; -webkit-user-select:none; }
+      .keys { display:flex; flex-wrap:wrap; gap:6px; margin:10px 0; }
+      .keys button { width:auto; flex:1 1 auto; min-width:56px; margin:0; padding:11px 8px; font-size:14px; background:#3a3a52; }
+      .bar { display:flex; gap:8px; align-items:center; margin:8px 0; font-size:13px; color:#9a9ab0; }
+      .bar button { width:auto; margin:0; padding:9px 12px; font-size:13px; }
+    </style>
+  </head>
+  <body>
+    <h1>Daytona Desktop</h1>
+    <p id="sub">A cloud Linux desktop you can watch and drive from your phone.</p>
+
+    <!-- ── Screen 1: API key ─────────────────────────────────────────── -->
+    <section id="s-key">
+      <div class="note">
+        <b>This plugin talks to the internet.</b> Your Daytona API key and everything you tap or type
+        here are sent to <b>app.daytona.io</b> and your sandbox's proxy — not through an SSH tunnel.
+        The key is stored encrypted on this device and is never put in a URL or written to the log.
+        <br /><br />
+        A Daytona API key is <b>organisation-wide</b>: anyone holding it can create, read and delete
+        every sandbox in your org.
+      </div>
+      <input id="key" type="password" placeholder="dtn_…" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false" />
+      <button id="save-key">Save &amp; connect</button>
+    </section>
+
+    <!-- ── Screen 2: sandboxes ───────────────────────────────────────── -->
+    <section id="s-list" class="hidden">
+      <div id="boxes"></div>
+      <button id="new">New desktop sandbox</button>
+      <button id="refresh" class="secondary">Refresh</button>
+      <button id="forget" class="secondary">Change API key</button>
+    </section>
+
+    <!-- ── Screen 3: one sandbox ─────────────────────────────────────── -->
+    <section id="s-desk" class="hidden">
+      <div id="sbinfo" class="note"></div>
+
+      <button id="vnc">Open full desktop (VNC)</button>
+      <button id="vnc-ext" class="secondary">Open in browser ↗</button>
+      <button id="restart" class="hidden">Restart desktop</button>
+
+      <div id="remote" class="hidden">
+        <img id="screen" alt="Sandbox screen" />
+        <div class="bar">
+          <button id="live" class="secondary">Pause</button>
+          <button id="shot" class="secondary">Refresh</button>
+          <span id="fps"></span>
+        </div>
+        <div class="keys">
+          <button data-key="escape">Esc</button>
+          <button data-key="tab">Tab</button>
+          <button data-key="enter">Enter</button>
+          <button data-key="backspace">⌫</button>
+          <button data-key="up">↑</button>
+          <button data-key="down">↓</button>
+          <button data-key="left">←</button>
+          <button data-key="right">→</button>
+          <button data-hotkey="ctrl+c">^C</button>
+          <button data-hotkey="ctrl+d">^D</button>
+          <button data-hotkey="ctrl+l">^L</button>
+          <button data-scroll="up">Scroll ↑</button>
+          <button data-scroll="down">Scroll ↓</button>
+        </div>
+        <input id="typebox" placeholder="Type into the desktop…" autocapitalize="none" autocorrect="off" spellcheck="false" />
+        <button id="send">Send text</button>
+      </div>
+
+      <button id="back" class="secondary">← Sandboxes</button>
+    </section>
+
+    <pre id="log">Ready.</pre>
+    <script src="app.js"></script>
+  </body>
+</html>
