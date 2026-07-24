@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>ElevenLabs Speak</title>
+    <style>
+      /* Dev fallbacks only — ui.theme() replaces these with the host's palette on device. */
+      :root { --accent:#5a5af0; --bg:#0e0e14; --surface:#1b1b24; --text:#eee; }
+      * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+      body { margin:0; font:16px/1.45 system-ui,sans-serif; background:var(--bg); color:var(--text); padding:16px; padding-bottom:max(16px,env(safe-area-inset-bottom)); }
+      h1 { font-size:18px; margin:0 0 4px; }
+      p { color:#aaa; margin:4px 0 14px; font-size:14px; }
+      button { width:100%; padding:14px; margin:6px 0; border:0; border-radius:10px; background:var(--accent); color:#fff; font-size:16px; }
+      button.secondary { background:#31313f; }
+      button:disabled { opacity:.5; }
+      input, textarea, select { width:100%; padding:13px; margin:6px 0; border:1px solid #31313f; border-radius:10px; background:var(--surface); color:var(--text); font-size:16px; font-family:inherit; }
+      textarea { min-height:104px; resize:vertical; }
+      pre { background:var(--surface); padding:10px; border-radius:8px; white-space:pre-wrap; word-break:break-word; font-size:12px; max-height:30vh; overflow:auto; }
+      .hidden { display:none; }
+      .note { background:var(--surface); border-left:3px solid #7a7aff; border-radius:8px; padding:10px; margin:10px 0; font-size:13px; color:#ccc; }
+      .note b { color:var(--text); }
+      label { display:block; font-size:13px; color:#9a9ab0; margin-top:10px; }
+      .row { display:flex; gap:8px; }
+      .row button { margin:0; }
+      .count { font-size:12px; color:#9a9ab0; text-align:right; margin:0 2px 6px; }
+      .count.over { color:#ffb020; }
+      audio { width:100%; margin:8px 0 2px; }
+      .presets { display:flex; flex-wrap:wrap; gap:6px; margin:2px 0 4px; }
+      .presets button { width:auto; flex:1 1 auto; min-width:88px; margin:0; padding:9px 8px; font-size:13px; background:#31313f; }
+    </style>
+  </head>
+  <body>
+    <h1>ElevenLabs Speak</h1>
+    <p id="sub">Have your phone read the remote box out loud.</p>
+
+    <!-- ── Screen 1: API key ─────────────────────────────────────────── -->
+    <section id="s-key">
+      <div class="note">
+        <b>This plugin talks to the internet.</b> Your ElevenLabs API key and every line you ask it
+        to speak are sent to <b>api.elevenlabs.io</b> — not through the SSH tunnel. The key is stored
+        encrypted on this device and is never put in a URL or written to the log.
+        <br /><br />
+        ElevenLabs bills <b>per character</b>. Command output is capped (see settings) so a long log
+        tail can't run up a bill by accident.
+      </div>
+      <input id="key" type="password" placeholder="sk_…" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false" />
+      <button id="save-key">Save &amp; connect</button>
+    </section>
+
+    <!-- ── Screen 2: speak ───────────────────────────────────────────── -->
+    <section id="s-main" class="hidden">
+      <label for="voice">Voice</label>
+      <select id="voice"></select>
+
+      <label for="text">Text</label>
+      <textarea id="text" placeholder="Type or paste anything to hear it…" autocapitalize="sentences" spellcheck="false"></textarea>
+      <div class="count" id="count"></div>
+      <button id="speak">Speak</button>
+
+      <label for="cmd">…or speak what a command prints</label>
+      <div class="presets">
+        <button data-cmd="tail -n 40 ~/agent.log">agent log</button>
+        <button data-cmd="git -C ~/ log --oneline -5">git log</button>
+        <button data-cmd="uptime; free -h | head -2">host health</button>
+      </div>
+      <input id="cmd" placeholder="tail -n 40 ~/agent.log" autocapitalize="none" autocorrect="off" spellcheck="false" />
+      <div class="row">
+        <button id="run">Run &amp; speak</button>
+        <button id="run-only" class="secondary">Run only</button>
+      </div>
+
+      <!-- Native controls are a light slab in a dark UI, so keep it hidden until there's a clip. -->
+      <audio id="player" class="hidden" controls preload="none"></audio>
+      <button id="replay" class="secondary hidden">▶ Play</button>
+
+      <button id="forget" class="secondary">Change API key</button>
+    </section>
+
+    <pre id="log">Ready.</pre>
+    <script src="app.js"></script>
+  </body>
+</html>

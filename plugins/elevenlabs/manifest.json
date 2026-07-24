@@ -1,0 +1,60 @@
+{
+  "id": "io.github.mobilessh.elevenlabs",
+  "name": "ElevenLabs Speak",
+  "description": "Have your phone read remote output aloud: pipe a command's output — an agent log, a test summary, a diff — through ElevenLabs text-to-speech. Sends your API key and the text to api.elevenlabs.io.",
+  "version": "1.0.0",
+  "minBridgeVersion": "1.0.0",
+  "category": "other",
+  "icon": "icon.svg",
+  "author": "Mobile SSH",
+  "homepage": "https://elevenlabs.io/docs/api-reference/text-to-speech/convert-with-timestamps",
+  "capabilities": [
+    "SSH_EXEC",
+    "HTTP_INTERNET",
+    "STORAGE"
+  ],
+  "sessionRequirement": "REQUIRES_ACTIVE_SESSION",
+  "ui": {
+    "entry": "ui/index.html"
+  },
+  "settings": [
+    {
+      "key": "apiKey",
+      "label": "ElevenLabs API key",
+      "type": "secret",
+      "placeholder": "sk_…",
+      "help": "Create one at elevenlabs.io → Profile → API keys. Stored encrypted on this device (Keychain / Keystore) and sent only to api.elevenlabs.io. The key needs Text to Speech and Voices read permission."
+    },
+    {
+      "key": "model",
+      "label": "Model",
+      "type": "select",
+      "default": "eleven_turbo_v2_5",
+      "help": "Turbo is the cheapest and fastest and is what you want for reading logs. Multilingual v2 sounds better and costs about twice as much per character.",
+      "options": [
+        { "value": "eleven_turbo_v2_5", "label": "Turbo v2.5 — fast, cheap" },
+        { "value": "eleven_multilingual_v2", "label": "Multilingual v2 — best quality" },
+        { "value": "eleven_flash_v2_5", "label": "Flash v2.5 — lowest latency" }
+      ]
+    },
+    {
+      "key": "quality",
+      "label": "Audio quality",
+      "type": "select",
+      "default": "mp3_22050_32",
+      "help": "How much mobile data each spoken line costs. 22 kHz/32 kbps is roughly 4 KB per second of speech and is fine for voice; 44 kHz/128 kbps is four times the data.",
+      "options": [
+        { "value": "mp3_22050_32", "label": "Low — 32 kbps, save data" },
+        { "value": "mp3_44100_64", "label": "Medium — 64 kbps" },
+        { "value": "mp3_44100_128", "label": "High — 128 kbps" }
+      ]
+    },
+    {
+      "key": "maxChars",
+      "label": "Max characters per request",
+      "type": "number",
+      "default": 800,
+      "help": "ElevenLabs bills per character, so a 40 000-character log tail spoken by accident is a real bill. Anything longer than this is cut at a sentence boundary and the plugin tells you how much it dropped."
+    }
+  ]
+}
