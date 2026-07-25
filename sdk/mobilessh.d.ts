@@ -40,6 +40,7 @@ export interface MobileSSHBridge {
   tunnel: TunnelApi;
   http: HttpApi;
   storage: StorageApi;
+  servers: ServersApi;
   recipe: RecipeApi;
   ui: UiApi;
   notify(opts: NotifyOptions): Promise<void>;
@@ -52,7 +53,8 @@ export type Capability =
   | 'HTTP_LOOPBACK'    // http.fetch to 127.0.0.1:<forwarded port> (data stays on the tunnel)
   | 'HTTP_INTERNET'    // http.fetch to arbitrary hosts (loud disclosure required)
   | 'STORAGE'          // plugin-scoped key/value (+ encrypted secrets)
-  | 'NOTIFICATIONS';   // post a local notification / ntfy
+  | 'NOTIFICATIONS'    // post a local notification / ntfy
+  | 'SERVERS_MANAGE';  // create/remove saved-server rows THIS plugin owns (never read the user's)
 
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 
@@ -153,6 +155,80 @@ export interface StorageApi {
   putSecret(key: string, value: string): Promise<void>;
   getSecret(key: string): Promise<string | null>;
   remove(key: string): Promise<void>;
+}
+
+// ── Saved servers (plugin-owned rows) ───────────────────────────────────────────
+/**
+ * Write access to the app's saved-server list, scoped to rows THIS plugin created.
+ * You can never read, edit or delete a row the user made — `list()` returns only your own
+ * rows, and `remove()` only ever matches your own `ref`. Ownership is recorded by the HOST
+ * on the row itself, not in plugin storage, so it cannot be forged.
+ *
+ * Rows are always CREDENTIAL-LESS: host, port and username only. Passing a password or key
+ * rejects rather than being silently dropped. That suits a token-as-username gateway (the
+ * token IS the user, the password stays empty); anything needing a real secret stays manual.
+ *
+ * The HOST asks the user before creating a row, and again whenever the host or port changes.
+ * A username-only change (a rotated token) updates silently.
+ *
+ * Available from bridge 1.1.0. Neither host enforces `minBridgeVersion`, and the shim ships
+ * inside the app bundle — so on an older host `MobileSSH.servers` is `undefined` and a bare
+ * call throws a TypeError. Feature-detect BOTH:
+ *
+ *     var ok = !!(MobileSSH.servers && typeof MobileSSH.servers.add === 'function')
+ *              && await MobileSSH.hasCapability('SERVERS_MANAGE');
+ */
+export interface ServersApi {
+  /**
+   * Create the row identified by `ref`, or update it in place if it already exists.
+   * Idempotent: re-adding the same `ref` with identical values writes nothing (`'unchanged'`).
+   */
+  add(server: ServerDraft): Promise<ServerAddResult>;
+  /** Remove a row this plugin created. Resolves (never rejects) when `ref` is unknown. */
+  remove(ref: string): Promise<ServerRemoval>;
+  /** Rows this plugin owns, in list order. Never includes the user's own servers. */
+  list(): Promise<ManagedServer[]>;
+}
+
+export interface ServerDraft {
+  /** Plugin-scoped idempotency key, e.g. a sandbox id. `^[A-Za-z0-9._-]{1,64}$`. */
+  ref: string;
+  /** Hostname or bracketed IPv6 literal. No scheme, userinfo, port, path or whitespace. */
+  host: string;
+  /** 1–65535. */
+  port: number;
+  /** SSH username (for a token-as-username gateway, the token). 1–128 chars, no whitespace. */
+  user: string;
+  /** One-line hint shown under the row, e.g. the sandbox name. Max 48 chars. */
+  note?: string;
+  /** Advisory expiry, epoch ms. The host badges the row; it NEVER auto-deletes it. */
+  expiresAt?: number;
+}
+
+export interface ManagedServer {
+  ref: string;
+  host: string;
+  port: number;
+  user: string;
+  note: string;
+  /** 0 when the row carries no expiry. */
+  expiresAt: number;
+}
+
+export interface ServerAddResult extends ManagedServer {
+  /**
+   * `'created'`   — new row; the user approved it.
+   * `'updated'`   — existing row changed in place.
+   * `'unchanged'` — every field already matched; nothing was written.
+   * `'declined'`  — the user dismissed the consent dialog; NOTHING was written.
+   */
+  status: 'created' | 'updated' | 'unchanged' | 'declined';
+}
+
+export interface ServerRemoval {
+  removed: boolean;
+  /** `'not-found'` — never added, already removed, or the user has since edited/deleted it. */
+  reason?: 'not-found';
 }
 
 // ── Server recipe ────────────────────────────────────────────────────────────────

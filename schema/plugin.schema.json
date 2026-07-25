@@ -27,7 +27,7 @@
       "type": "array",
       "uniqueItems": true,
       "items": {
-        "enum": ["SSH_EXEC", "TUNNEL", "HTTP_LOOPBACK", "HTTP_INTERNET", "STORAGE", "NOTIFICATIONS"]
+        "enum": ["SSH_EXEC", "TUNNEL", "HTTP_LOOPBACK", "HTTP_INTERNET", "STORAGE", "NOTIFICATIONS", "SERVERS_MANAGE"]
       }
     },
     "sessionRequirement": {

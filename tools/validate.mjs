@@ -64,6 +64,11 @@ for (const dir of pluginDirs()) {
     console.warn(`[warn] ${dir}: declares HTTP_INTERNET without HTTP_LOOPBACK (egress beyond the tunnel).`);
   }
 
+  // SERVERS_MANAGE writes to the user's saved-server list — surface it for review.
+  if ((manifest.capabilities || []).includes('SERVERS_MANAGE')) {
+    console.warn(`[warn] ${dir}: declares SERVERS_MANAGE (may create saved-server rows it owns).`);
+  }
+
   if (manifest.recipe) {
     const rp = join(base, manifest.recipe);
     if (!existsSync(rp)) { fail(dir, `recipe not found: ${manifest.recipe}`); continue; }

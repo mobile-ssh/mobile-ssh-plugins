@@ -18,7 +18,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '1.0.0';
+  var VERSION = '1.1.0';
 
   if (window.MobileSSH) return; // already injected
 
@@ -158,6 +158,14 @@
       putSecret: function (key, value) { return invoke('storage.putSecret', { key: key, value: value }); },
       getSecret: function (key) { return invoke('storage.getSecret', { key: key }); },
       remove: function (key) { return invoke('storage.remove', { key: key }); },
+    },
+
+    /* Promise-returning (not the fire-and-forget style ui.toast uses): on a host older than
+       1.1.0 the rejection is the plugin's only signal that this API is unavailable. */
+    servers: {
+      add: function (server) { return invoke('servers.add', server || {}); },
+      remove: function (ref) { return invoke('servers.remove', { ref: ref }); },
+      list: function () { return invoke('servers.list', {}); },
     },
 
     recipe: {
