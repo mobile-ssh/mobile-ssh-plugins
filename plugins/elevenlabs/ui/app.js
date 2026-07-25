@@ -24,6 +24,7 @@
   var voices = [];
   var cfg = { model: 'eleven_turbo_v2_5', quality: 'mp3_22050_32', maxChars: 800 };
   var unlocked = false;
+  var lastAudio = null;     // base64 of the clip now loaded, so it can be saved after playing
 
   // ── helpers ──────────────────────────────────────────────────────────────
   function log(msg) { logEl.textContent = msg; try { MobileSSH.log('info', msg); } catch (e) {} }
@@ -261,8 +262,10 @@
       });
       if (!j || !j.audio_base64) throw new Error('ElevenLabs returned no audio.');
 
+      lastAudio = j.audio_base64;
       player.src = 'data:audio/mpeg;base64,' + j.audio_base64;
       player.classList.remove('hidden');        // scrub bar is only useful once there's a clip
+      $('save-audio').classList.remove('hidden');
       var kb = Math.round(j.audio_base64.length * 0.75 / 1024);
       try {
         await player.play();
@@ -278,6 +281,55 @@
     } finally {
       $('speak').disabled = false;
       $('run').disabled = false;
+    }
+  }
+
+  // ── save the clip ────────────────────────────────────────────────────────
+  /* The <audio> element's own download control cannot work here, for two independent
+     reasons: the bridged plugin WebView has no DownloadListener on Android
+     (PluginHostActivity attaches one only to the service WebView) and no WKDownloadDelegate
+     on iOS, so the download is dropped silently; and the clip is a data: URL, which the
+     host refuses to re-fetch even where a listener exists ("blob:/data: can't be
+     re-fetched"). Writing it to the server you are already connected to needs no host
+     change — and the app's own SFTP File Transfer screen can then pull it to the phone. */
+  var B64_CHUNK = 24576;   // base64 chars per exec: many commands, each far below ARG_MAX
+
+  async function sh(cmd) {
+    var r = await MobileSSH.ssh.exec(cmd, { timeoutMs: 60000 });
+    if (r.exitCode !== 0) {
+      throw new Error(((r.stderr || r.stdout || 'command failed').trim()).slice(0, 160));
+    }
+    return r;
+  }
+
+  async function saveToServer() {
+    if (!lastAudio) { log('Speak something first — there is no clip to save.'); return; }
+    var btn = $('save-audio');
+    btn.disabled = true;
+    try {
+      var stamp = new Date().toISOString().replace(/[:-]/g, '').replace(/\..+$/, '');
+      var dir = '~/mobile-ssh-speech';
+      var tmp = dir + '/.speech-' + stamp + '.b64';
+      var mp3 = dir + '/speech-' + stamp + '.mp3';
+
+      await sh('mkdir -p ' + dir);
+      /* base64's alphabet is A-Za-z0-9+/= so it is safe inside single quotes with no
+         escaping; appending in chunks keeps any single command comfortably small. */
+      for (var i = 0; i < lastAudio.length; i += B64_CHUNK) {
+        await sh('printf %s ' + "'" + lastAudio.slice(i, i + B64_CHUNK) + "' " +
+                 (i === 0 ? '>' : '>>') + ' ' + tmp);
+        log('Saving to the server… ' +
+            Math.min(100, Math.round((i + B64_CHUNK) / lastAudio.length * 100)) + '%');
+      }
+      /* -d is GNU/Linux, -D is BSD/macOS. */
+      await sh('{ base64 -d ' + tmp + ' > ' + mp3 + ' 2>/dev/null || base64 -D ' + tmp + ' > ' + mp3 + '; } && rm -f ' + tmp);
+      var r = await sh('ls -l ' + mp3 + " | awk '{print $5}'");
+      log('Saved ' + mp3.replace('~', '~') + ' (' + (r.stdout || '').trim() +
+          ' bytes). Open File Transfer to copy it to your phone.');
+    } catch (e) {
+      fail(e);
+    } finally {
+      btn.disabled = false;
     }
   }
 
@@ -316,6 +368,7 @@
     $('speak').addEventListener('click', function () { unlock(); speak(textEl.value); });
     $('run').addEventListener('click', function () { unlock(); runCommand(true); });
     $('run-only').addEventListener('click', function () { runCommand(false); });
+    $('save-audio').addEventListener('click', saveToServer);
     $('replay').addEventListener('click', function () {
       var p = player.play();
       if (p && p.catch) p.catch(fail);
