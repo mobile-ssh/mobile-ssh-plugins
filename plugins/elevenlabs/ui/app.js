@@ -262,8 +262,8 @@
       });
       if (!j || !j.audio_base64) throw new Error('ElevenLabs returned no audio.');
 
-      lastAudio = j.audio_base64;
-      player.src = 'data:audio/mpeg;base64,' + j.audio_base64;
+      lastAudio = assertBase64(j.audio_base64);
+      player.src = 'data:audio/mpeg;base64,' + lastAudio;
       player.classList.remove('hidden');        // scrub bar is only useful once there's a clip
       $('save-audio').classList.remove('hidden');
       var kb = Math.round(j.audio_base64.length * 0.75 / 1024);
@@ -294,6 +294,20 @@
      change — and the app's own SFTP File Transfer screen can then pull it to the phone. */
   var B64_CHUNK = 24576;   // base64 chars per exec: many commands, each far below ARG_MAX
 
+  /* SECURITY: saveToServer single-quotes this payload straight into a shell command that
+     runs on the user's server, and it arrives over the network. "It's base64, so it can't
+     contain a quote" is an assumption about a remote response, not a guarantee — a spoofed
+     or compromised reply carrying a single quote would break out of the quoting and turn
+     SSH_EXEC into arbitrary command execution on the host. The bridge's ssh.exec takes no
+     stdin, so there is nowhere safer to put the bytes; validate at the boundary instead
+     and refuse anything that is not strictly the base64 alphabet. */
+  function assertBase64(s) {
+    if (typeof s !== 'string' || !s.length || !/^[A-Za-z0-9+/=]+$/.test(s)) {
+      throw new Error('ElevenLabs returned audio in an unexpected format — refusing to use it.');
+    }
+    return s;
+  }
+
   async function sh(cmd) {
     var r = await MobileSSH.ssh.exec(cmd, { timeoutMs: 60000 });
     if (r.exitCode !== 0) {
@@ -307,6 +321,7 @@
     var btn = $('save-audio');
     btn.disabled = true;
     try {
+      var b64 = assertBase64(lastAudio);   // re-check at the point of use, not just on arrival
       var stamp = new Date().toISOString().replace(/[:-]/g, '').replace(/\..+$/, '');
       var dir = '~/mobile-ssh-speech';
       var tmp = dir + '/.speech-' + stamp + '.b64';
@@ -315,11 +330,11 @@
       await sh('mkdir -p ' + dir);
       /* base64's alphabet is A-Za-z0-9+/= so it is safe inside single quotes with no
          escaping; appending in chunks keeps any single command comfortably small. */
-      for (var i = 0; i < lastAudio.length; i += B64_CHUNK) {
-        await sh('printf %s ' + "'" + lastAudio.slice(i, i + B64_CHUNK) + "' " +
+      for (var i = 0; i < b64.length; i += B64_CHUNK) {
+        await sh('printf %s ' + "'" + b64.slice(i, i + B64_CHUNK) + "' " +
                  (i === 0 ? '>' : '>>') + ' ' + tmp);
         log('Saving to the server… ' +
-            Math.min(100, Math.round((i + B64_CHUNK) / lastAudio.length * 100)) + '%');
+            Math.min(100, Math.round((i + B64_CHUNK) / b64.length * 100)) + '%');
       }
       /* -d is GNU/Linux, -D is BSD/macOS. */
       await sh('{ base64 -d ' + tmp + ' > ' + mp3 + ' 2>/dev/null || base64 -D ' + tmp + ' > ' + mp3 + '; } && rm -f ' + tmp);
