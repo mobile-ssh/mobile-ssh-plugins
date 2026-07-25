@@ -44,10 +44,18 @@ MobileSSH.ui.openExternal(tunnel.url);                         // …or hand it 
 
 `openService` shows the service in the in-app (bridge-less) WebView; `openExternal` opens it in the
 default mobile browser. Both use the same tunnel — only the server side needs the forward, the client
-is just a URL. The tunnel stays alive in the background (Android foreground service / iOS background
-execution + reconnect) while the user is in the browser. The host also shows a 🌐 button in its top bar for any plugin that declares a `tunnel`/
+is just a URL. On Android the tunnel stays alive in the background (foreground service) while the
+user is in the browser; on iOS the app only gets a short (~30 s) background grace window, after which
+the tunnel is suspended until the user returns to the app and it reconnects. The host also shows a 🌐 button in its top bar for any plugin that declares a `tunnel`/
 `serviceUrl`, so users get this even if your UI doesn't add its own button. (A plugin's *own* bridge UI
 can't run in an external browser — only server-backed service URLs can.)
+
+File downloads work in the service WebView: when the service offers a file — a
+`Content-Disposition: attachment` response or an `<a download>` link (e.g. a finished MeTube
+video) — the host saves it to the phone (Android asks where via the system file picker; iOS saves
+into the app's Documents with a share handoff). Prefer the in-app WebView for large downloads on
+iOS: in an external browser the app can be suspended in the background, which freezes the tunnel
+mid-download.
 
 With a recipe:
 

@@ -1,8 +1,8 @@
 {
   "id": "io.github.mobilessh.ytdlp",
   "name": "yt-dlp (MeTube)",
-  "description": "Download videos with yt-dlp from a web UI (MeTube) on the remote — open it in-app or in your phone's browser. Paste a URL; files save on the server.",
-  "version": "1.0.0",
+  "description": "Download videos with yt-dlp from a web UI (MeTube) on the remote — open it in-app or in your phone's browser. Paste a URL; files save on the server, and the ⬇ button saves them to your phone.",
+  "version": "1.1.0",
   "minBridgeVersion": "1.0.0",
   "category": "other",
   "icon": "icon.svg",
