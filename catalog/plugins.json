@@ -698,7 +698,7 @@
       "id": "io.github.mobilessh.elevenlabs",
       "name": "ElevenLabs Speak",
       "description": "Have your phone read remote output aloud: pipe a command's output — an agent log, a test summary, a diff — through ElevenLabs text-to-speech. Sends your API key and the text to api.elevenlabs.io.",
-      "version": "1.1.0",
+      "version": "1.2.0",
       "minBridgeVersion": "1.0.0",
       "role": "other",
       "icon": "plugins/elevenlabs/icon.svg",
@@ -716,11 +716,11 @@
         },
         {
           "path": "manifest.json",
-          "sha256": "057624a316cb7a497eca6529d3606684594aeaffd9dd0f05b7c3b60a674c7621"
+          "sha256": "f6b4920ada9b6c00c3d3bff68b36d6090c827c2153683b22a6be6c2dd7d4bfbd"
         },
         {
           "path": "ui/app.js",
-          "sha256": "4e8b5476c470f818b2f4340dc5dfee9f0be00cbbd0b6a2ea376ea46d1e064a74"
+          "sha256": "777fb4494e75f648da98ff24da494cd61f971c500bd88dde6ff14583bccdfc2e"
         },
         {
           "path": "ui/index.html",

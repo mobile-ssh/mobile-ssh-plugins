@@ -2,7 +2,7 @@
   "id": "io.github.mobilessh.elevenlabs",
   "name": "ElevenLabs Speak",
   "description": "Have your phone read remote output aloud: pipe a command's output — an agent log, a test summary, a diff — through ElevenLabs text-to-speech. Sends your API key and the text to api.elevenlabs.io.",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "minBridgeVersion": "1.0.0",
   "category": "other",
   "icon": "icon.svg",
@@ -48,6 +48,14 @@
         { "value": "mp3_44100_64", "label": "Medium — 64 kbps" },
         { "value": "mp3_44100_128", "label": "High — 128 kbps" }
       ]
+    },
+    {
+      "key": "saveDir",
+      "label": "Save clips to (on the server)",
+      "type": "string",
+      "default": "~/mobile-ssh-speech",
+      "placeholder": "~/mobile-ssh-speech",
+      "help": "Folder on the connected host where ⬇ Save writes the MP3; it is created if missing. Use the app's File Transfer screen to copy clips to the phone. Letters, digits and . _ - / ~ only."
     },
     {
       "key": "maxChars",

@@ -22,7 +22,8 @@
 
   var apiKey = null;
   var voices = [];
-  var cfg = { model: 'eleven_turbo_v2_5', quality: 'mp3_22050_32', maxChars: 800 };
+  var cfg = { model: 'eleven_turbo_v2_5', quality: 'mp3_22050_32', maxChars: 800,
+              saveDir: '~/mobile-ssh-speech' };
   var unlocked = false;
   var lastAudio = null;     // base64 of the clip now loaded, so it can be saved after playing
 
@@ -301,6 +302,18 @@
      SSH_EXEC into arbitrary command execution on the host. The bridge's ssh.exec takes no
      stdin, so there is nowhere safer to put the bytes; validate at the boundary instead
      and refuse anything that is not strictly the base64 alphabet. */
+  /* The save folder is a user setting that also lands in a shell command. It cannot simply
+     be single-quoted, because ~ has to stay unquoted to expand — so restrict the charset
+     and refuse anything that could carry shell meaning. */
+  function safeDir(p) {
+    p = String(p == null ? '' : p).trim().replace(/\/+$/, '');
+    if (!p) return '~/mobile-ssh-speech';
+    if (!/^[~A-Za-z0-9_./-]+$/.test(p)) {
+      throw new Error('The save folder may only contain letters, digits and . _ - / ~ — check the plugin settings.');
+    }
+    return p;
+  }
+
   function assertBase64(s) {
     if (typeof s !== 'string' || !s.length || !/^[A-Za-z0-9+/=]+$/.test(s)) {
       throw new Error('ElevenLabs returned audio in an unexpected format — refusing to use it.');
@@ -323,7 +336,7 @@
     try {
       var b64 = assertBase64(lastAudio);   // re-check at the point of use, not just on arrival
       var stamp = new Date().toISOString().replace(/[:-]/g, '').replace(/\..+$/, '');
-      var dir = '~/mobile-ssh-speech';
+      var dir = safeDir(cfg.saveDir);
       var tmp = dir + '/.speech-' + stamp + '.b64';
       var mp3 = dir + '/speech-' + stamp + '.mp3';
 
@@ -415,8 +428,10 @@
       var m = await MobileSSH.storage.get('model');
       var q = await MobileSSH.storage.get('quality');
       var c = await MobileSSH.storage.get('maxChars');
+      var d = await MobileSSH.storage.get('saveDir');
       if (m) cfg.model = m;
       if (q) cfg.quality = q;
+      if (d) cfg.saveDir = d;
       cfg.maxChars = Math.max(50, num(c, cfg.maxChars));
     } catch (e) { /* keep defaults */ }
   }
