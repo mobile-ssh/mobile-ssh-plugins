@@ -31,6 +31,7 @@
   var cuReady = false;          // is computer-use known-running? gates every input call
   var cuCheckedAt = 0;          // when we last had positive evidence of that
   var signedToken = null;       // last signed preview token, so we can revoke it
+  var sshToken = null;          // last minted SSH access token, so we can revoke it
   var lastTap = 0, lastPt = null, down = null, longTimer = null, didLong = false;
 
   // ── helpers ──────────────────────────────────────────────────────────────
@@ -233,9 +234,11 @@
     lastFrame = null;               // don't let a previous sandbox's frame suppress the first paint
     idleMs = FRAME_MS;
     cuReady = false;
+    sshToken = null;
     show('s-desk');
     $('remote').classList.add('hidden');
     $('restart').classList.add('hidden');
+    ['ssh-box', 'ssh-help', 'ssh-revoke'].forEach(function (id) { $(id).classList.add('hidden'); });
     info();
     try {
       await ensureDesktop();
@@ -395,6 +398,56 @@
     } catch (e) { fail(e); } finally { btn.disabled = false; }
   }
 
+  // ── SSH access to the sandbox ────────────────────────────────────────────
+  /* Daytona fronts every sandbox with an SSH gateway. POST /ssh-access mints a short-lived
+     token that IS the username — the gateway authenticates on it alone and rejects password
+     auth, so a saved server needs an empty password. (JSch attempts the "none" method before
+     it ever consults PreferredAuthentications, so this works on the Android host as-is.)
+
+     The plugin can only show these details: the bridge has no method to write to the saved
+     server list or open a connection, so adding the server is a manual step for now. */
+  var SSH_TTL_MIN = 60;
+
+  async function sshAccess() {
+    var btn = $('ssh');
+    btn.disabled = true;
+    try {
+      log('Requesting SSH access…');
+      var j = await http(API + '/sandbox/' + sb.id + '/ssh-access?expiresInMinutes=' + SSH_TTL_MIN,
+                         { method: 'POST' });
+      if (!j || !j.token) throw new Error('Daytona did not return an SSH token.');
+      sshToken = j.token;
+
+      /* Prefer the host Daytona itself puts in sshCommand over hardcoding the gateway. */
+      var m = /@([A-Za-z0-9.-]+)/.exec(j.sshCommand || '');
+      $('ssh-host').textContent = m ? m[1] : 'ssh.app.daytona.io';
+      $('ssh-user').textContent = j.token;          // shown, never written to the log
+      $('ssh-exp').textContent = j.expiresAt
+        ? 'Expires ' + new Date(j.expiresAt).toLocaleString()
+        : 'Expires in ' + SSH_TTL_MIN + ' minutes';
+      $('ssh-box').classList.remove('hidden');
+      $('ssh-help').classList.remove('hidden');
+      $('ssh-revoke').classList.remove('hidden');
+      log('SSH details ready. Tap this again later to mint a fresh token.');
+    } catch (e) { fail(e); } finally { btn.disabled = false; }
+  }
+
+  async function sshRevoke() {
+    if (!sshToken) return;
+    var btn = $('ssh-revoke');
+    btn.disabled = true;
+    var tok = sshToken;
+    try {
+      await http(API + '/sandbox/' + sb.id + '/ssh-access?token=' + encodeURIComponent(tok),
+                 { method: 'DELETE' });
+      sshToken = null;
+      $('ssh-box').classList.add('hidden');
+      $('ssh-help').classList.add('hidden');
+      btn.classList.add('hidden');
+      log('SSH access revoked. Any saved server using that username will stop working.');
+    } catch (e) { fail(e); } finally { btn.disabled = false; }
+  }
+
   // ── screenshot loop ──────────────────────────────────────────────────────
   function startLive() { live = true; $('live').textContent = 'Pause'; tick(); }
   function stopLive() {
@@ -551,6 +604,8 @@
     $('vnc').addEventListener('click', function () { openVnc(false); });
     $('vnc-ext').addEventListener('click', function () { openVnc(true); });
     $('restart').addEventListener('click', restartSandbox);
+    $('ssh').addEventListener('click', sshAccess);
+    $('ssh-revoke').addEventListener('click', sshRevoke);
     $('back').addEventListener('click', function () {
       stopLive();
       revokeSigned().catch(function () {}).then(function () {

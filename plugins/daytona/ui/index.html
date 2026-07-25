@@ -18,6 +18,11 @@
       .hidden { display:none; }
       .note { background:var(--surface); border-left:3px solid var(--accent); border-radius:8px; padding:10px; margin:10px 0; font-size:13px; color:#ccc; }
       .note b { color:var(--text); }
+      .cred { background:var(--surface); border-radius:8px; padding:10px 12px; margin:8px 0; font-size:14px; }
+      .cred div { display:flex; gap:10px; padding:3px 0; }
+      .cred .k { color:#9a9ab0; width:44px; flex:none; }
+      .cred b { font-family:ui-monospace,monospace; word-break:break-all; }
+      .cred .exp { display:block; color:#9a9ab0; font-size:12px; padding-top:6px; }
 
       /* Sandbox list */
       .box { background:var(--surface); border-radius:10px; padding:12px; margin:8px 0; }
@@ -70,6 +75,21 @@
       <button id="vnc">Open full desktop (VNC)</button>
       <button id="vnc-ext" class="secondary">Open in browser ↗</button>
       <button id="restart" class="hidden">Restart desktop</button>
+
+      <button id="ssh" class="secondary">Get SSH details</button>
+      <div id="ssh-box" class="cred hidden">
+        <div><span class="k">Host</span><b id="ssh-host">ssh.app.daytona.io</b></div>
+        <div><span class="k">Port</span><b id="ssh-port">22</b></div>
+        <div><span class="k">User</span><b id="ssh-user"></b></div>
+        <div><span class="k">Pass</span><b>leave empty</b></div>
+        <div id="ssh-exp" class="exp"></div>
+      </div>
+      <div id="ssh-help" class="note hidden">
+        Add this under <b>Saved servers</b> with an empty password — the sandbox gateway
+        authenticates on the username alone. The username <b>is</b> the credential, so
+        anyone who has it can reach this sandbox until it expires.
+      </div>
+      <button id="ssh-revoke" class="secondary hidden">Revoke SSH access</button>
 
       <div id="remote" class="hidden">
         <img id="screen" alt="Sandbox screen" />
