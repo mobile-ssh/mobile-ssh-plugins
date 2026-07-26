@@ -2,10 +2,17 @@
   "description": "Run MeTube — a yt-dlp web UI — in Docker on the remote, bound to loopback 127.0.0.1:8081 (reached only over the SSH tunnel). Paste a video/playlist URL in the web UI and yt-dlp downloads it on the server into ~/yt-dlp-downloads, merged to mp4. Inspired by a Docker yt-dlp setup.",
   "steps": [
     {
+      "id": "preflight",
+      "description": "Check this server can install Docker unattended: curl present, and root without a password prompt.",
+      "check": "{ [ \"$(id -u)\" = 0 ] || sudo -n true; } >/dev/null 2>&1 && command -v curl >/dev/null 2>&1",
+      "run": "if ! command -v curl >/dev/null 2>&1; then echo \"curl is not installed on this server. Install it (apt install curl) and run setup again.\" >&2; fi; if ! { [ \"$(id -u)\" = 0 ] || sudo -n true; } >/dev/null 2>&1; then echo \"This account cannot become root without a password prompt. Recipe steps run on an SSH channel with no terminal, so sudo has nowhere to ask for a password and would wait forever instead of prompting. Connect as root, or give this user passwordless sudo, then run setup again.\" >&2; fi; exit 1",
+      "timeoutMs": 30000
+    },
+    {
       "id": "docker",
       "description": "Install Docker if it isn't already (official get.docker.com script). Skipped if docker is present.",
-      "check": "command -v docker",
-      "run": "curl -fsSL https://get.docker.com -o /tmp/get-docker.sh && sudo sh /tmp/get-docker.sh && { sudo usermod -aG docker $USER || true; }",
+      "check": "command -v docker >/dev/null 2>&1",
+      "run": "SUDO=; [ \"$(id -u)\" = 0 ] || SUDO=\"sudo -n\"; d=$(mktemp -d) || exit 1; echo \"Fetching get.docker.com...\"; curl -fsSL https://get.docker.com -o \"$d/get-docker.sh\" || exit 1; printf 'DPkg::Lock::Timeout \"120\";\\n' > \"$d/apt.conf\"; echo \"Installing Docker. The installer runs apt quietly, so expect a few minutes with no further output.\"; $SUDO env APT_CONFIG=\"$d/apt.conf\" DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a NEEDRESTART_SUSPEND=1 sh \"$d/get-docker.sh\" </dev/null; rc=$?; rm -rf \"$d\"; [ $rc -eq 0 ] || exit $rc; $SUDO usermod -aG docker \"$(id -un)\" >/dev/null 2>&1 || true; echo \"Docker installed.\"",
       "sudo": true,
       "stream": true,
       "timeoutMs": 600000
@@ -13,8 +20,8 @@
     {
       "id": "run",
       "description": "Start the MeTube container: web UI on 127.0.0.1:8081, downloads in ~/yt-dlp-downloads, merged to mp4.",
-      "check": "docker ps --filter name=metube --filter status=running -q | grep -q .",
-      "run": "mkdir -p ~/yt-dlp-downloads; docker rm -f metube 2>/dev/null || true; docker run -d --name metube --restart unless-stopped -p 127.0.0.1:8081:8081 -v ~/yt-dlp-downloads:/downloads -e PUID=$(id -u) -e PGID=$(id -g) -e YTDL_OPTIONS='{\"merge_output_format\":\"mp4\"}' ghcr.io/alexta69/metube",
+      "check": "docker ps --filter name=metube --filter status=running -q 2>/dev/null | grep -q . || sudo -n docker ps --filter name=metube --filter status=running -q 2>/dev/null | grep -q .",
+      "run": "DK=docker; docker info >/dev/null 2>&1 || DK=\"sudo -n docker\"; mkdir -p \"$HOME/yt-dlp-downloads\"; $DK rm -f metube >/dev/null 2>&1 || true; echo \"Pulling the MeTube image...\"; $DK pull ghcr.io/alexta69/metube || exit 1; echo \"Starting the container...\"; $DK run -d --name metube --restart unless-stopped -p 127.0.0.1:8081:8081 -v \"$HOME/yt-dlp-downloads:/downloads\" -e PUID=$(id -u) -e PGID=$(id -g) -e YTDL_OPTIONS='{\"merge_output_format\":\"mp4\"}' ghcr.io/alexta69/metube",
       "sudo": true,
       "stream": true,
       "timeoutMs": 600000,
@@ -24,12 +31,19 @@
       "id": "wait",
       "description": "Wait for MeTube to finish starting.",
       "check": "curl -fsS http://127.0.0.1:8081/ >/dev/null 2>&1",
-      "run": "for i in $(seq 1 60); do curl -fsS http://127.0.0.1:8081/ >/dev/null 2>&1 && exit 0; sleep 2; done; echo 'MeTube is still starting — give it a moment, then open it.'",
+      "run": "echo \"Waiting for MeTube to answer on 127.0.0.1:8081...\"; for i in $(seq 1 60); do curl -fsS http://127.0.0.1:8081/ >/dev/null 2>&1 && { echo \"MeTube is up.\"; exit 0; }; sleep 2; done; echo \"MeTube is still starting - give it a moment, then open it.\"",
+      "stream": true,
       "continueOnError": true,
       "timeoutMs": 150000
     }
   ],
   "uninstall": [
-    { "id": "remove", "description": "Stop and remove the MeTube container. Your downloads in ~/yt-dlp-downloads are kept.", "run": "docker rm -f metube 2>/dev/null || true", "sudo": true, "continueOnError": true }
+    {
+      "id": "remove",
+      "description": "Stop and remove the MeTube container. Your downloads in ~/yt-dlp-downloads are kept.",
+      "run": "DK=docker; docker info >/dev/null 2>&1 || DK=\"sudo -n docker\"; $DK rm -f metube >/dev/null 2>&1 || true; echo \"MeTube container removed; downloads in ~/yt-dlp-downloads are kept.\"",
+      "sudo": true,
+      "continueOnError": true
+    }
   ]
 }
