@@ -665,13 +665,14 @@
       "id": "io.github.mobilessh.daytona",
       "name": "Daytona Desktop",
       "description": "Run a Daytona cloud sandbox desktop from your phone: full noVNC screen, or tap-to-click Computer Use. Sends your Daytona API key and input to app.daytona.io.",
-      "version": "1.1.0",
-      "minBridgeVersion": "1.0.0",
+      "version": "1.2.0",
+      "minBridgeVersion": "1.1.0",
       "role": "other",
       "icon": "plugins/daytona/icon.svg",
       "capabilities": [
         "HTTP_INTERNET",
-        "STORAGE"
+        "STORAGE",
+        "SERVERS_MANAGE"
       ],
       "sessionRequirement": "STANDALONE",
       "path": "plugins/daytona",
@@ -682,15 +683,15 @@
         },
         {
           "path": "manifest.json",
-          "sha256": "a20466d042c8037a67aadeb34d6a7eff57ff26112c65444e4fcc317d3554ae12"
+          "sha256": "053fed09a44e2ba9cccfd6af1560703f43095ea18ff16866b35f0a2d16b899df"
         },
         {
           "path": "ui/app.js",
-          "sha256": "2d24f6ab04c275e82f4840d00d0a73f07cd8d192b00d50bd328bdd580dee09bd"
+          "sha256": "782eeda1fd5011df6b55f424f728a0ccb1edabfa34457974081fce928a9ac328"
         },
         {
           "path": "ui/index.html",
-          "sha256": "a8694906707ed2a787863e034045a3e778a30f71841b466cc5ba0a50e4018f30"
+          "sha256": "37b9c67abab0f24751a6d591023c4e343351a079bbf7d603ece7cf625e72a393"
         }
       ]
     },

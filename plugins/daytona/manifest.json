@@ -2,15 +2,16 @@
   "id": "io.github.mobilessh.daytona",
   "name": "Daytona Desktop",
   "description": "Run a Daytona cloud sandbox desktop from your phone: full noVNC screen, or tap-to-click Computer Use. Sends your Daytona API key and input to app.daytona.io.",
-  "version": "1.1.0",
-  "minBridgeVersion": "1.0.0",
+  "version": "1.2.0",
+  "minBridgeVersion": "1.1.0",
   "category": "other",
   "icon": "icon.svg",
   "author": "Mobile SSH",
   "homepage": "https://www.daytona.io/docs/en/computer-use/",
   "capabilities": [
     "HTTP_INTERNET",
-    "STORAGE"
+    "STORAGE",
+    "SERVERS_MANAGE"
   ],
   "sessionRequirement": "STANDALONE",
   "ui": {

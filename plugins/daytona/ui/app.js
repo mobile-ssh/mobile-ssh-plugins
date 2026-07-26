@@ -32,6 +32,7 @@
   var cuCheckedAt = 0;          // when we last had positive evidence of that
   var signedToken = null;       // last signed preview token, so we can revoke it
   var sshToken = null;          // last minted SSH access token, so we can revoke it
+  var serverRowRef = null;      // ref of the Saved servers row we created, so revoke can drop it
   var lastTap = 0, lastPt = null, down = null, longTimer = null, didLong = false;
 
   // ── helpers ──────────────────────────────────────────────────────────────
@@ -404,8 +405,11 @@
      auth, so a saved server needs an empty password. (JSch attempts the "none" method before
      it ever consults PreferredAuthentications, so this works on the Android host as-is.)
 
-     The plugin can only show these details: the bridge has no method to write to the saved
-     server list or open a connection, so adding the server is a manual step for now. */
+     Since bridge 1.1.0 the plugin can also write the row itself (servers.add), so the token
+     lands in Saved servers without the user retyping a 32-character username. The row is
+     credential-less by construction, which is exactly right here: the token IS the user and
+     the password stays empty. ref = the sandbox id, so re-minting an hour later UPDATES the
+     same row instead of piling up duplicates, and revoking removes it. */
   var SSH_TTL_MIN = 60;
 
   async function sshAccess() {
@@ -428,8 +432,48 @@
       $('ssh-box').classList.remove('hidden');
       $('ssh-help').classList.remove('hidden');
       $('ssh-revoke').classList.remove('hidden');
-      log('SSH details ready. Tap this again later to mint a fresh token.');
+
+      var host = $('ssh-host').textContent;
+      var saved = await saveServerRow(host, j.token, j.expiresAt);
+      log(saved || 'SSH details ready. Tap this again later to mint a fresh token.');
     } catch (e) { fail(e); } finally { btn.disabled = false; }
+  }
+
+  /* Put the sandbox in Saved servers. Returns a status line, or null when the host is too old
+     (bridge < 1.1.0) or the capability is not granted — the details stay on screen either way,
+     so the manual path still works. Never throws: failing to save must not lose the token the
+     user just minted. */
+  async function saveServerRow(host, token, expiresAt) {
+    if (!MobileSSH.servers || typeof MobileSSH.servers.add !== 'function') return null;
+    try {
+      if (!(await MobileSSH.hasCapability('SERVERS_MANAGE'))) return null;
+    } catch (e) { return null; }
+    try {
+      /* Daytona has returned both an ISO string and epoch ms here; Date.parse(number) is NaN. */
+      var exp = typeof expiresAt === 'number' ? expiresAt
+              : expiresAt ? Date.parse(expiresAt) : NaN;
+      var res = await MobileSSH.servers.add({
+        ref: sb.id,
+        host: host,
+        port: 22,
+        user: token,
+        /* Max 48 chars, shown under the row. A sandbox id alone is 36, so prefer the name. */
+        note: (sb.name ? 'Daytona · ' + sb.name
+                       : 'Daytona sandbox ' + String(sb.id).slice(0, 8)).slice(0, 48),
+        expiresAt: isNaN(exp) ? undefined : exp
+      });
+      serverRowRef = sb.id;
+      if (res && res.status === 'declined') {
+        return 'Not saved — you dismissed the prompt. The details above still work manually.';
+      }
+      if (res && res.status === 'unchanged') return 'Already in Saved servers (token unchanged).';
+      if (res && res.status === 'updated') return 'Saved servers updated with the fresh token.';
+      return 'Added to Saved servers — connect from the home screen.';
+    } catch (e) {
+      /* A rejected add is not fatal: the user can still copy the details by hand. */
+      try { MobileSSH.log('warn', 'servers.add failed: ' + (e && e.message ? e.message : e)); } catch (x) {}
+      return 'SSH details ready (could not add them to Saved servers automatically).';
+    }
   }
 
   async function sshRevoke() {
@@ -444,7 +488,18 @@
       $('ssh-box').classList.add('hidden');
       $('ssh-help').classList.add('hidden');
       btn.classList.add('hidden');
-      log('SSH access revoked. Any saved server using that username will stop working.');
+      var removed = false;
+      if (serverRowRef && MobileSSH.servers && typeof MobileSSH.servers.remove === 'function') {
+        /* The row's username is the token we just killed, so leaving it would be a dead entry. */
+        try {
+          var r = await MobileSSH.servers.remove(serverRowRef);
+          removed = !!(r && r.removed);
+          serverRowRef = null;
+        } catch (e) { /* leave the row; it is inert and the user can delete it */ }
+      }
+      log(removed
+        ? 'SSH access revoked and the saved server removed.'
+        : 'SSH access revoked. Any saved server using that username will stop working.');
     } catch (e) { fail(e); } finally { btn.disabled = false; }
   }
 
