@@ -37,13 +37,22 @@
       "timeoutMs": 120000
     },
     {
+      "id": "image",
+      "description": "Download the MeTube image (~1.2 GB, so minutes on a slow link; quick when it is already current). Skipped if MeTube is already running.",
+      "check": "docker ps --filter name=metube --filter status=running -q 2>/dev/null | grep -q . || sudo -n docker ps --filter name=metube --filter status=running -q 2>/dev/null | grep -q .",
+      "run": "DK=docker; docker info >/dev/null 2>&1 || DK=\"sudo -n docker\"; echo \"Pulling the MeTube image (~1.2 GB the first time)...\"; $DK pull ghcr.io/alexta69/metube",
+      "sudo": true,
+      "stream": true,
+      "timeoutMs": 2700000
+    },
+    {
       "id": "run",
       "description": "Start the MeTube container: web UI on 127.0.0.1:8081, downloads in ~/yt-dlp-downloads, merged to mp4.",
       "check": "docker ps --filter name=metube --filter status=running -q 2>/dev/null | grep -q . || sudo -n docker ps --filter name=metube --filter status=running -q 2>/dev/null | grep -q .",
-      "run": "DK=docker; docker info >/dev/null 2>&1 || DK=\"sudo -n docker\"; mkdir -p \"$HOME/yt-dlp-downloads\"; $DK rm -f metube >/dev/null 2>&1 || true; echo \"Pulling the MeTube image...\"; $DK pull ghcr.io/alexta69/metube || exit 1; echo \"Starting the container...\"; $DK run -d --name metube --restart unless-stopped -p 127.0.0.1:8081:8081 -v \"$HOME/yt-dlp-downloads:/downloads\" -e PUID=$(id -u) -e PGID=$(id -g) -e YTDL_OPTIONS='{\"merge_output_format\":\"mp4\"}' ghcr.io/alexta69/metube",
+      "run": "DK=docker; docker info >/dev/null 2>&1 || DK=\"sudo -n docker\"; mkdir -p \"$HOME/yt-dlp-downloads\"; $DK rm -f metube >/dev/null 2>&1 || true; echo \"Starting the container...\"; $DK run -d --name metube --restart unless-stopped -p 127.0.0.1:8081:8081 -v \"$HOME/yt-dlp-downloads:/downloads\" -e PUID=$(id -u) -e PGID=$(id -g) -e YTDL_OPTIONS='{\"merge_output_format\":\"mp4\"}' ghcr.io/alexta69/metube",
       "sudo": true,
       "stream": true,
-      "timeoutMs": 600000,
+      "timeoutMs": 300000,
       "forwardPort": 8081
     },
     {
