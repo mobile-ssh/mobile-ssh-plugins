@@ -1,21 +1,40 @@
 {
-  "description": "Run MeTube — a yt-dlp web UI — in Docker on the remote, bound to loopback 127.0.0.1:8081 (reached only over the SSH tunnel). Paste a video/playlist URL in the web UI and yt-dlp downloads it on the server into ~/yt-dlp-downloads, merged to mp4. Inspired by a Docker yt-dlp setup.",
+  "description": "Run MeTube — a yt-dlp web UI — in Docker on the remote, bound to loopback 127.0.0.1:8081 (reached only over the SSH tunnel). Missing pieces are installed for you: curl, Docker, and the daemon itself. Paste a video/playlist URL in the web UI and yt-dlp downloads it on the server into ~/yt-dlp-downloads, merged to mp4. Inspired by a Docker yt-dlp setup.",
   "steps": [
     {
       "id": "preflight",
-      "description": "Check this server can install Docker unattended: curl present, and root without a password prompt.",
-      "check": "{ [ \"$(id -u)\" = 0 ] || sudo -n true; } >/dev/null 2>&1 && command -v curl >/dev/null 2>&1",
-      "run": "if ! command -v curl >/dev/null 2>&1; then echo \"curl is not installed on this server. Install it (apt install curl) and run setup again.\" >&2; fi; if ! { [ \"$(id -u)\" = 0 ] || sudo -n true; } >/dev/null 2>&1; then echo \"This account cannot become root without a password prompt. Recipe steps run on an SSH channel with no terminal, so sudo has nowhere to ask for a password and would wait forever instead of prompting. Connect as root, or give this user passwordless sudo, then run setup again.\" >&2; fi; exit 1",
+      "description": "Check this server can install things unattended: root without a password prompt, or Docker already running for this account.",
+      "check": "{ [ \"$(id -u)\" = 0 ] || sudo -n true; } >/dev/null 2>&1 || docker info >/dev/null 2>&1",
+      "run": "echo \"Docker does not run for this account, and the account cannot become root without a password prompt, so nothing can be installed. Recipe steps run on an SSH channel with no terminal, so sudo has nowhere to ask for a password and would wait forever instead of prompting. Connect as root, give this user passwordless sudo, or add it to the docker group, then run setup again.\" >&2; exit 1",
       "timeoutMs": 30000
     },
     {
-      "id": "docker",
-      "description": "Install Docker if it isn't already (official get.docker.com script). Skipped if docker is present.",
-      "check": "command -v docker >/dev/null 2>&1",
-      "run": "SUDO=; [ \"$(id -u)\" = 0 ] || SUDO=\"sudo -n\"; d=$(mktemp -d) || exit 1; echo \"Fetching get.docker.com...\"; curl -fsSL https://get.docker.com -o \"$d/get-docker.sh\" || exit 1; printf 'DPkg::Lock::Timeout \"120\";\\n' > \"$d/apt.conf\"; echo \"Installing Docker. The installer runs apt quietly, so expect a few minutes with no further output.\"; $SUDO env APT_CONFIG=\"$d/apt.conf\" DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a NEEDRESTART_SUSPEND=1 sh \"$d/get-docker.sh\" </dev/null; rc=$?; rm -rf \"$d\"; [ $rc -eq 0 ] || exit $rc; $SUDO usermod -aG docker \"$(id -un)\" >/dev/null 2>&1 || true; echo \"Docker installed.\"",
+      "id": "fetcher",
+      "description": "Install curl if the server has neither curl nor wget — the Docker installer is downloaded with one of them. Skipped if either is already there; best-effort, so setup carries on if it fails.",
+      "check": "command -v curl >/dev/null 2>&1 || command -v wget >/dev/null 2>&1",
+      "run": "SUDO=; [ \"$(id -u)\" = 0 ] || SUDO=\"sudo -n\"; echo \"Installing curl (this server has neither curl nor wget)...\"; if command -v apt-get >/dev/null 2>&1; then $SUDO env DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a NEEDRESTART_SUSPEND=1 apt-get -o DPkg::Lock::Timeout=120 update </dev/null; $SUDO env DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a NEEDRESTART_SUSPEND=1 apt-get -o DPkg::Lock::Timeout=120 -y install curl ca-certificates </dev/null; elif command -v dnf >/dev/null 2>&1; then $SUDO dnf -y install curl ca-certificates </dev/null; elif command -v yum >/dev/null 2>&1; then $SUDO yum -y install curl ca-certificates </dev/null; elif command -v zypper >/dev/null 2>&1; then $SUDO zypper --non-interactive install curl ca-certificates </dev/null; elif command -v pacman >/dev/null 2>&1; then $SUDO pacman -Sy --noconfirm curl ca-certificates </dev/null; elif command -v apk >/dev/null 2>&1; then $SUDO apk add --no-cache curl ca-certificates </dev/null; else echo \"No apt-get, dnf, yum, zypper, pacman or apk here to install curl with.\" >&2; exit 1; fi; command -v curl >/dev/null 2>&1 || command -v wget >/dev/null 2>&1 || { echo \"curl still is not on PATH. Setup carries on: this only blocks the Docker install, which is skipped when Docker is already there.\" >&2; exit 1; }; echo \"curl installed.\"",
       "sudo": true,
       "stream": true,
+      "continueOnError": true,
       "timeoutMs": 600000
+    },
+    {
+      "id": "docker",
+      "description": "Install Docker if it isn't already: the official get.docker.com script, falling back to this distro's own docker package. Skipped if docker is present.",
+      "check": "command -v docker >/dev/null 2>&1",
+      "run": "SUDO=; [ \"$(id -u)\" = 0 ] || SUDO=\"sudo -n\"; d=$(mktemp -d) || exit 1; echo \"Fetching get.docker.com...\"; if command -v curl >/dev/null 2>&1; then curl -fsSL https://get.docker.com -o \"$d/get-docker.sh\"; else wget -qO \"$d/get-docker.sh\" https://get.docker.com; fi; if [ -s \"$d/get-docker.sh\" ]; then printf 'DPkg::Lock::Timeout \"120\";\\n' > \"$d/apt.conf\"; echo \"Installing Docker. The installer runs apt quietly, so expect a few minutes with no further output.\"; $SUDO env APT_CONFIG=\"$d/apt.conf\" DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a NEEDRESTART_SUSPEND=1 sh \"$d/get-docker.sh\" </dev/null; else echo \"Could not download the Docker installer.\" >&2; fi; rm -rf \"$d\"; if ! command -v docker >/dev/null 2>&1; then echo \"get.docker.com did not install Docker here; trying this distro's own package...\"; if command -v apt-get >/dev/null 2>&1; then $SUDO env DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a NEEDRESTART_SUSPEND=1 apt-get -o DPkg::Lock::Timeout=120 update </dev/null; $SUDO env DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a NEEDRESTART_SUSPEND=1 apt-get -o DPkg::Lock::Timeout=120 -y install docker.io </dev/null; elif command -v dnf >/dev/null 2>&1; then $SUDO dnf -y install docker </dev/null; elif command -v yum >/dev/null 2>&1; then $SUDO yum -y install docker </dev/null; elif command -v zypper >/dev/null 2>&1; then $SUDO zypper --non-interactive install docker </dev/null; elif command -v pacman >/dev/null 2>&1; then $SUDO pacman -Sy --noconfirm docker </dev/null; elif command -v apk >/dev/null 2>&1; then $SUDO apk add --no-cache docker </dev/null; fi; fi; command -v docker >/dev/null 2>&1 || { echo \"Docker could not be installed on this server.\" >&2; exit 1; }; $SUDO usermod -aG docker \"$(id -un)\" >/dev/null 2>&1 || true; echo \"Docker installed.\"",
+      "sudo": true,
+      "stream": true,
+      "timeoutMs": 900000
+    },
+    {
+      "id": "daemon",
+      "description": "Start the Docker daemon and enable it at boot. Skipped if Docker already answers.",
+      "check": "docker info >/dev/null 2>&1 || sudo -n docker info >/dev/null 2>&1",
+      "run": "SUDO=; [ \"$(id -u)\" = 0 ] || SUDO=\"sudo -n\"; echo \"Starting the Docker daemon...\"; $SUDO systemctl enable --now docker >/dev/null 2>&1 || { $SUDO rc-update add docker default >/dev/null 2>&1; $SUDO rc-service docker start >/dev/null 2>&1; } || $SUDO service docker start >/dev/null 2>&1 || true; for i in $(seq 1 30); do { docker info >/dev/null 2>&1 || $SUDO docker info >/dev/null 2>&1; } && { echo \"Docker daemon is up.\"; exit 0; }; sleep 1; done; echo \"Docker is installed but its daemon is not answering. Start it on the server (systemctl start docker), then run setup again.\" >&2; exit 1",
+      "sudo": true,
+      "stream": true,
+      "timeoutMs": 120000
     },
     {
       "id": "run",
@@ -30,8 +49,8 @@
     {
       "id": "wait",
       "description": "Wait for MeTube to finish starting.",
-      "check": "curl -fsS http://127.0.0.1:8081/ >/dev/null 2>&1",
-      "run": "echo \"Waiting for MeTube to answer on 127.0.0.1:8081...\"; for i in $(seq 1 60); do curl -fsS http://127.0.0.1:8081/ >/dev/null 2>&1 && { echo \"MeTube is up.\"; exit 0; }; sleep 2; done; echo \"MeTube is still starting - give it a moment, then open it.\"",
+      "check": "curl -fsS -o /dev/null http://127.0.0.1:8081/ 2>/dev/null || wget -q -O /dev/null http://127.0.0.1:8081/ 2>/dev/null",
+      "run": "if command -v curl >/dev/null 2>&1; then GET=\"curl -fsS -o /dev/null\"; elif command -v wget >/dev/null 2>&1; then GET=\"wget -q -O /dev/null\"; else echo \"No curl or wget here to probe with - the container is started; open MeTube in a moment.\"; exit 0; fi; echo \"Waiting for MeTube to answer on 127.0.0.1:8081...\"; for i in $(seq 1 60); do $GET http://127.0.0.1:8081/ 2>/dev/null && { echo \"MeTube is up.\"; exit 0; }; sleep 2; done; echo \"MeTube is still starting - give it a moment, then open it.\"",
       "stream": true,
       "continueOnError": true,
       "timeoutMs": 150000
