@@ -19,7 +19,10 @@ contents do not pass through a hosted service or an additional server process.
    hunk. **Change 1 of N** shows your position; navigation stops at either end.
    A file with one change shows **Change 1 of 1** with both buttons disabled.
    The selected block stays selected when switching between unified and split
-   views, and navigation brings it below the toolbar.
+   views, and navigation brings it below the toolbar. Split view keeps line
+   numbers visible while scrolling sideways and matches the height of paired
+   rows, including wrapped lines and addition/deletion placeholders. Rows
+   readjust when you change text size, wrapping, or screen orientation.
 4. Stage or unstage whole files, enter a commit message, then commit the staged
    changes. Fetch, pull, and push use the current branch's configured upstream.
 

@@ -195,7 +195,7 @@
       "id": "io.github.mobilessh.git",
       "name": "Git",
       "description": "Review remote repositories with touch-friendly diffs, stage files, commit, and synchronize. Set up lazygit and delta for terminal workflows.",
-      "version": "1.0.3",
+      "version": "1.0.4",
       "minBridgeVersion": "1.2.0",
       "role": "ide",
       "icon": "plugins/git/icon.svg",
@@ -212,7 +212,7 @@
         },
         {
           "path": "manifest.json",
-          "sha256": "dca963e6e7b3cf61fe5c7c40d15053d3a1906d008f0efc4139b9517e7f952a89"
+          "sha256": "3b1f92523c1881c646efbc3892fc5dc4bbdcb99fd71bf6a08e1f23cde023bb35"
         },
         {
           "path": "recipe.json",
@@ -220,7 +220,7 @@
         },
         {
           "path": "ui/app.js",
-          "sha256": "3f6b0769dfd5aa9f124f0f6e3097942d3da8873b47b7f68612256e4ebccec2da"
+          "sha256": "b02fa4117e460d77000361331f2da396a840aaa628f09cc27726cda2e3dbba25"
         },
         {
           "path": "ui/git.js",
@@ -236,7 +236,7 @@
         },
         {
           "path": "ui/styles.css",
-          "sha256": "240438e8acdb37068b6df255d67f51d1ba2e77dc1729caace6e166667bb53f29"
+          "sha256": "defaedba941b82ed725270eb624c6573488285c7cbe42581a2123505a0025677"
         },
         {
           "path": "ui/tools.js",

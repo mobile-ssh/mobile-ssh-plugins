@@ -31,7 +31,20 @@ pre { white-space:pre-wrap; overflow-wrap:anywhere; font:12px/1.5 monospace; max
 #diff { overflow-x:auto; background:var(--bg); } #diff .d2h-wrapper { font-size:var(--diff-font); } #diff .d2h-diff-table { font-size:var(--diff-font); } #diff .d2h-file-header { display:none; }
 #diff .d2h-code-line, #diff .d2h-code-side-line { padding:0 0.5em; } #diff .d2h-file-wrapper { border-color:#7f879444; } #diff .d2h-code-linenumber, #diff .d2h-code-side-linenumber { position:static; display:table-cell; vertical-align:top; min-width:2.2em; width:auto; padding:0 3px; font-size:11px; user-select:none; }
 #diff .d2h-code-linenumber { width:4.5em; } #diff .d2h-code-side-linenumber { width:3em; }
+#diff .d2h-file-side-diff, #diff .d2h-diff-tbody td { vertical-align:top; }
+/* Sticky gutters need an opaque base beneath the renderer's translucent change colors. */
+#diff .d2h-wrapper { --gutter-bg:var(--d2h-bg-color); --gutter-del:var(--d2h-del-bg-color); --gutter-ins:var(--d2h-ins-bg-color); --gutter-info:var(--d2h-info-bg-color); --gutter-empty:var(--d2h-empty-placeholder-bg-color); }
+#diff .d2h-dark-color-scheme { --gutter-bg:var(--d2h-dark-bg-color); --gutter-del:var(--d2h-dark-del-bg-color); --gutter-ins:var(--d2h-dark-ins-bg-color); --gutter-info:var(--d2h-dark-info-bg-color); --gutter-empty:var(--d2h-dark-empty-placeholder-bg-color); }
+#diff .d2h-code-side-linenumber { position:sticky; left:0; z-index:1; background-color:var(--gutter-bg); background-image:linear-gradient(var(--gutter-tint,transparent),var(--gutter-tint,transparent)); }
+#diff .d2h-code-side-linenumber.d2h-del { --gutter-tint:var(--gutter-del); }
+#diff .d2h-code-side-linenumber.d2h-ins { --gutter-tint:var(--gutter-ins); }
+#diff .d2h-code-side-linenumber.d2h-info { --gutter-tint:var(--gutter-info); }
+#diff .d2h-code-side-linenumber.d2h-emptyplaceholder { --gutter-tint:var(--gutter-empty); }
 #diff .line-num1, #diff .line-num2 { width:50%; padding:0 1px; }
 #diff .d2h-code-line-ctn { user-select:text; } #diff.wrap-lines .d2h-code-line-ctn { white-space:pre-wrap; overflow-wrap:anywhere; word-break:break-word; } #diff.wrap-lines .d2h-diff-table { table-layout:fixed; }
-#diff.wrap-lines .d2h-code-line, #diff.wrap-lines .d2h-code-side-line { width:100%; } #diff .current-change { box-shadow:inset 3px 0 var(--accent); }
+#diff.wrap-lines .d2h-code-line, #diff.wrap-lines .d2h-code-side-line { display:flex; align-items:flex-start; width:100%; white-space:pre-wrap; overflow-wrap:anywhere; word-break:break-word; }
+#diff.wrap-lines .d2h-code-line-prefix { flex:0 0 1ch; }
+#diff.wrap-lines .d2h-code-line-ctn { flex:1; min-width:0; width:auto; }
+#diff.wrap-lines .d2h-code-line ins, #diff.wrap-lines .d2h-code-line del, #diff.wrap-lines .d2h-code-side-line ins, #diff.wrap-lines .d2h-code-side-line del { display:inline; }
+#diff .current-change { box-shadow:inset 3px 0 var(--accent); }
 @media(min-width:850px) { body { max-width:1250px; margin:auto; } #files { display:grid; grid-template-columns:1fr 1fr; gap:0 24px; } .diff-toolbar { gap:14px; } }

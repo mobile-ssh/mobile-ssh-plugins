@@ -8,6 +8,8 @@
   var toolReport = null;
   var TOOL_IDS = ['git', 'lazygit', 'delta'];
   var MAX_RENDER_CHARS = 400000, MAX_RENDER_LINES = 6000;
+  var splitRows = [], splitPanes = [], splitWidths = [];
+  var splitFrame = null, splitObserver = null;
 
   function text(tag, value, className) {
     var el = document.createElement(tag);
@@ -54,6 +56,7 @@
   }
 
   function resetDiff() {
+    clearSplitRows();
     patch = '';
     changes = [];
     changeIndex = -1;
@@ -110,6 +113,7 @@
   }
 
   function showDiffNote(message, raw) {
+    clearSplitRows();
     $('diff-note').textContent = message;
     $('diff-note').hidden = false;
     $('diff-raw').textContent = raw || '';
@@ -138,12 +142,77 @@
     });
     viewer.draw();
     viewer.highlightCode();
+    prepareSplitRows();
     var previousIndex = changeIndex;
     changes = collectChanges();
     changeIndex = changes.length ? Math.max(0, Math.min(previousIndex, changes.length - 1)) : -1;
     highlightChange();
     updateControls();
     if (previousIndex >= 0) scrollToChange('auto');
+  }
+
+  function clearSplitRows() {
+    if (splitFrame !== null) { window.cancelAnimationFrame(splitFrame); splitFrame = null; }
+    if (splitObserver) { splitObserver.disconnect(); splitObserver = null; }
+    splitRows = [];
+    splitPanes = [];
+    splitWidths = [];
+  }
+
+  function prepareSplitRows() {
+    clearSplitRows();
+    $('diff').querySelectorAll('.d2h-file-wrapper').forEach(function (file) {
+      var sides = Array.from(file.querySelectorAll('.d2h-file-side-diff'));
+      if (sides.length !== 2) return;
+      var bodies = sides.map(function (side) { return side.querySelector('.d2h-diff-tbody'); });
+      if (!bodies[0] || !bodies[1]) return;
+      var left = Array.from(bodies[0].children), right = Array.from(bodies[1].children);
+      for (var row = 0; row < Math.max(left.length, right.length); row++) {
+        splitRows.push([left[row], right[row]].filter(Boolean));
+      }
+      Array.prototype.push.apply(splitPanes, sides);
+    });
+    if (!splitRows.length) return;
+    syncSplitRows();
+    splitWidths = splitPanes.map(function (pane) { return pane.clientWidth; });
+    if (typeof window.ResizeObserver === 'function') {
+      splitObserver = new window.ResizeObserver(function () {
+        var widths = splitPanes.map(function (pane) { return pane.clientWidth; });
+        var changed = widths.some(function (width, index) { return width !== splitWidths[index]; });
+        splitWidths = widths;
+        // Ignore height notifications from our own row updates.
+        if (changed) scheduleSplitRows();
+      });
+      splitPanes.forEach(function (pane) { splitObserver.observe(pane); });
+    }
+  }
+
+  function syncSplitRows() {
+    if (splitFrame !== null) { window.cancelAnimationFrame(splitFrame); splitFrame = null; }
+    if (!splitRows.length || !splitPanes.some(function (pane) { return pane.clientWidth > 0; })) return;
+    var pageX = window.scrollX, pageY = window.scrollY;
+    var offsets = splitPanes.map(function (pane) { return [pane.scrollLeft, pane.scrollTop]; });
+    // Clear every previous constraint before reading any natural row heights. This
+    // lets rows shrink after widening the view, reducing text size, or disabling wrap.
+    splitRows.forEach(function (pair) { pair.forEach(function (row) { row.style.height = ''; }); });
+    var heights = splitRows.map(function (pair) {
+      return Math.max.apply(null, pair.map(function (row) { return row.getBoundingClientRect().height; }));
+    });
+    splitRows.forEach(function (pair, index) {
+      pair.forEach(function (row) { row.style.height = heights[index] + 'px'; });
+    });
+    // Height changes can trigger browser scroll anchoring. Keep the reader's
+    // current position; explicit Previous/Next navigation runs after this pass.
+    splitPanes.forEach(function (pane, index) {
+      if (pane.scrollLeft !== offsets[index][0]) pane.scrollLeft = offsets[index][0];
+      if (pane.scrollTop !== offsets[index][1]) pane.scrollTop = offsets[index][1];
+    });
+    if (window.scrollX !== pageX || window.scrollY !== pageY) window.scrollTo({ left: pageX, top: pageY, behavior: 'auto' });
+  }
+
+  function scheduleSplitRows() {
+    if (!splitRows.length || splitFrame !== null) return;
+    splitFrame = window.requestAnimationFrame(function () { splitFrame = null; syncSplitRows(); });
   }
 
   function collectChanges() {
@@ -306,8 +375,13 @@
   $('history-tab').onclick = function () { run(t('loading'), async function () { setTab('history'); await loadHistory(true); }); };
   $('more').onclick = function () { run(t('loading'), function () { return loadHistory(false); }); };
   $('layout').onchange = renderDiff;
-  $('wrap').onchange = function () { $('diff').classList.toggle('wrap-lines', $('wrap').checked); };
-  $('font').onchange = function () { document.documentElement.style.setProperty('--diff-font', $('font').value + 'px'); };
+  $('wrap').onchange = function () { $('diff').classList.toggle('wrap-lines', $('wrap').checked); syncSplitRows(); };
+  $('font').onchange = function () { document.documentElement.style.setProperty('--diff-font', $('font').value + 'px'); syncSplitRows(); };
+  window.addEventListener('resize', scheduleSplitRows);
+  if (document.fonts) {
+    document.fonts.ready.then(scheduleSplitRows);
+    document.fonts.addEventListener('loadingdone', scheduleSplitRows);
+  }
   $('previous').onclick = function () { moveChange(-1); };
   $('next').onclick = function () { moveChange(1); };
   $('check-tools').onclick = function () { run(t('check_tools'), function () { return checkTools(); }); };

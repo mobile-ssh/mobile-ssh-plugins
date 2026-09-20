@@ -105,6 +105,7 @@ function harness(options = {}) {
   context.scrollY = 0;
   context.scrollTo = options => calls.push(['scrollTo', options]);
   context.matchMedia = () => ({ matches: false });
+  context.addEventListener = () => {};
   vm.runInContext(fs.readFileSync(path.join(plugin, 'ui/i18n.js'), 'utf8'), context);
   vm.runInContext(fs.readFileSync(path.join(plugin, 'ui/app.js'), 'utf8'), context);
   return { get: id => elements.get(id), calls, rendered, stored, state, document, context, all };
