@@ -23,8 +23,9 @@ class Element {
   replaceChildren(...children) { this.children = children; }
   setAttribute(name, value) { this.attributes[name] = value; }
   scrollIntoView() { this.scrolled = true; }
+  getBoundingClientRect() { return { top: 300, height: 100 }; }
   querySelector() { return null; }
-  querySelectorAll(selector) { return this.descendants().filter(el => selector === '.d2h-info' && el.className === 'd2h-info'); }
+  querySelectorAll(selector) { return this.descendants().filter(el => selector.startsWith('.') && el.classList.contains(selector.slice(1))); }
   descendants() { return this.children.flatMap(el => [el, ...el.descendants()]); }
   async click() { if (!this.disabled && this.onclick) this.onclick(); await flush(); }
 }
@@ -71,11 +72,22 @@ function harness(options = {}) {
     ssh: { exec: async command => { calls.push(['exec', command]); return { stdout: 'tools', stderr: '', exitCode: 0 }; } },
     recipe: { run: async step => { calls.push(['recipe', step]); return options.recipe ? options.recipe(step) : { ok: true, log: 'installed' }; } }
   };
-  if (options.showTerminal) MobileSSH.ui.showTerminal = async () => { calls.push(['showTerminal']); };
   function Diff2HtmlUI(target, patch, config) {
     this.draw = () => {
       rendered.push({ patch, config });
-      target.replaceChildren(...[0, 1, 2].map(() => { const el = new Element('td'); el.className = 'd2h-info'; el.textContent = '@@ hunk @@'; return el; }));
+      const file = new Element('div'), body = new Element('tbody');
+      file.classList.add('d2h-file-wrapper'); body.classList.add('d2h-diff-tbody');
+      file.appendChild(body); target.replaceChildren(file);
+      // Minimal renderer adapter; real diff2html layout/scrolling is exercised by the browser suite.
+      let inHunk = false;
+      for (const line of patch.split('\n')) {
+        if (line.startsWith('@@')) inHunk = true;
+        if (!inHunk || !line) continue;
+        const row = new Element('tr'), cell = new Element('td');
+        cell.textContent = line;
+        cell.classList.add(line[0] === '+' ? 'd2h-ins' : line[0] === '-' ? 'd2h-del' : 'd2h-cntx');
+        row.appendChild(new Element('td')); row.appendChild(cell); body.appendChild(row);
+      }
     };
     this.highlightCode = () => {};
   }
@@ -90,6 +102,9 @@ function harness(options = {}) {
   } };
   const context = vm.createContext({ document, MobileSSH, MobileGitTools, MobileGit: { Client: function () { return methods; } }, navigator: { language: options.language || 'en' }, Diff2HtmlUI });
   context.window = context;
+  context.scrollY = 0;
+  context.scrollTo = options => calls.push(['scrollTo', options]);
+  context.matchMedia = () => ({ matches: false });
   vm.runInContext(fs.readFileSync(path.join(plugin, 'ui/i18n.js'), 'utf8'), context);
   vm.runInContext(fs.readFileSync(path.join(plugin, 'ui/app.js'), 'utf8'), context);
   return { get: id => elements.get(id), calls, rendered, stored, state, document, context, all };
@@ -177,16 +192,38 @@ test('binary and oversized patches avoid the HTML renderer', async () => {
     assert.equal(h.rendered.length, 0);
     assert.equal(h.get('diff-note').hidden, false);
     assert.equal(h.get('next').disabled, true);
+    assert.equal(h.get('previous').disabled, true);
+    assert.equal(h.get('change-position').hidden, true);
   }
 });
 
-test('previous hunk from an unselected diff navigates to the last change', async () => {
+test('navigation reaches separate edits within one hunk and stops at either end', async () => {
+  const h = harness({ patch: 'diff --git a/safe.txt b/safe.txt\n--- a/safe.txt\n+++ b/safe.txt\n@@ -1,3 +1,3 @@\n-old first\n+new first\n context\n-old last\n+new last\n' }); await flush();
+  await h.get('files').children[0].children[1].children[0].click();
+  const selected = () => h.get('diff').querySelectorAll('.current-change').map(el => el.textContent);
+  assert.deepEqual(selected(), ['-old first', '+new first']);
+  assert.equal(h.get('change-position').textContent, 'Change 1 of 2');
+  assert.equal(h.get('previous').disabled, true);
+  assert.equal(h.get('next').disabled, false);
+  await h.get('next').click();
+  assert.deepEqual(selected(), ['-old last', '+new last']);
+  assert.equal(h.get('change-position').textContent, 'Change 2 of 2');
+  assert.equal(h.get('previous').disabled, false);
+  assert.equal(h.get('next').disabled, true);
+  await h.get('next').click();
+  assert.equal(h.get('change-position').textContent, 'Change 2 of 2');
+  await h.get('previous').click();
+  assert.deepEqual(selected(), ['-old first', '+new first']);
+  assert.equal(h.get('previous').disabled, true);
+});
+
+test('a single change has a visible count without ineffective navigation buttons', async () => {
   const h = harness(); await flush();
   await h.get('files').children[0].children[1].children[0].click();
-  await h.get('previous').click();
-  assert.equal(h.get('diff').children[2].classList.contains('current-hunk'), true);
-  await h.get('next').click();
-  assert.equal(h.get('diff').children[0].classList.contains('current-hunk'), true);
+  assert.equal(h.get('change-position').hidden, false);
+  assert.equal(h.get('change-position').textContent, 'Change 1 of 1');
+  assert.equal(h.get('previous').disabled, true);
+  assert.equal(h.get('next').disabled, true);
 });
 
 test('history loads commit files and per-file diff, without any write', async () => {
@@ -277,15 +314,6 @@ test('an unfinished installation shows local guidance and does not rerun or repo
   assert.equal(h.get('error').hidden, true);
   assert.equal(h.calls.filter(call => call[0] === 'checkTools').length, 1);
   assert.deepEqual(h.calls.filter(call => call[0] === 'recipe'), [['recipe', 'install-delta']]);
-});
-
-test('terminal navigation uses native session focus and falls back to closing older hosts', async () => {
-  const h = harness({ showTerminal: true }); await flush();
-  await h.get('terminal').click();
-  assert.deepEqual(h.calls.filter(call => /^(showTerminal|close)$/.test(call[0])), [['showTerminal']]);
-  const older = harness(); await flush();
-  await older.get('terminal').click();
-  assert.deepEqual(older.calls.filter(call => /^(showTerminal|close)$/.test(call[0])), [['close']]);
 });
 
 test('all 20 locales have every UI string and right-to-left languages set direction', async () => {

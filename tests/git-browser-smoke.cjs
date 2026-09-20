@@ -21,11 +21,26 @@ const { chromium } = require(process.env.MOBILE_GIT_PLAYWRIGHT || 'playwright');
   const base = Array.from({ length: 35 }, (_, i) => 'const value' + i + ' = ' + i + ';');
   fs.writeFileSync(path.join(repository, 'app.js'), base.join('\n') + '\n');
   fs.writeFileSync(path.join(repository, 'binary.bin'), Buffer.from([0, 1, 2]));
+  const navigationBase = Array.from({ length: 80 }, (_, i) =>
+    'const navigationLine' + i + ' = "' + (i === 7 ? 'DELETE_ONLY_ORIGINAL' : 'original value ' + i) +
+    ' with enough source text to wrap on a narrow phone screen";');
+  fs.writeFileSync(path.join(repository, 'navigation.js'), navigationBase.join('\n') + '\n');
   git('add', '--all'); git('commit', '-m', 'Initial fixture');
   base[1] = 'const value1 = "<img src=x onerror=alert(1)>";';
   base[30] = 'const value30 = 300;';
   fs.writeFileSync(path.join(repository, 'app.js'), base.join('\n') + '\n');
   fs.writeFileSync(path.join(repository, 'binary.bin'), Buffer.from([0, 1, 3]));
+  const navigationChanged = navigationBase.flatMap((line, i) => {
+    if (i === 2) return ['const firstBlock = "FIRST_BLOCK_AFTER with wrapped source text for the phone screen";'];
+    if (i === 4) return [line, 'const insertedOnly = "INSERT_ONLY_AFTER with wrapped source text for the phone screen";'];
+    if (i === 7) return [];
+    if (i >= 29 && i <= 34) return ['const longBlock' + i + ' = "LONG_BLOCK_AFTER_' + i + ' with wrapped source text for the phone screen";'];
+    if (i === 64) return ['const lastBlock = "LAST_BLOCK_AFTER with wrapped source text for the phone screen";'];
+    return [line];
+  });
+  fs.writeFileSync(path.join(repository, 'navigation.js'), navigationChanged.join('\n') + '\n');
+  assert.equal((git('diff', '--', 'navigation.js').match(/^@@ /gm) || []).length, 3,
+    'navigation fixture has five change blocks across three Git hunks');
   fs.writeFileSync(path.join(repository, '<img onerror=alert(1)>.txt'), 'Untracked source\n');
   const server = http.createServer((req, res) => {
     const relative = decodeURIComponent(new URL(req.url, 'http://localhost').pathname);
@@ -42,6 +57,8 @@ const { chromium } = require(process.env.MOBILE_GIT_PLAYWRIGHT || 'playwright');
     browser = await chromium.launch({ executablePath: process.env.MOBILE_GIT_CHROMIUM || undefined, headless: true, args: ['--no-sandbox'] });
     const page = await browser.newPage({ viewport: { width: 390, height: 844 }, locale: 'en-US', isMobile: true, hasTouch: true });
     const errors = [], calls = [];
+    const artifacts = process.env.MOBILE_GIT_ARTIFACTS;
+    if (artifacts) fs.mkdirSync(artifacts, { recursive: true });
     let toolFixture = 'installed';
     page.on('pageerror', error => errors.push(error.message));
     page.on('dialog', dialog => { errors.push('Unexpected script dialog'); dialog.dismiss(); });
@@ -86,17 +103,109 @@ const { chromium } = require(process.env.MOBILE_GIT_PLAYWRIGHT || 'playwright');
     assert.equal(await page.locator('#diff img').count(), 0);
     assert.ok((await page.locator('#diff').innerText()).includes('<img src=x onerror=alert(1)>'));
     assert.ok(await page.locator('#diff .hljs-keyword').count(), 'real syntax highlighting runs');
-    await page.locator('#previous').click();
-    assert.equal(await page.locator('#diff .current-hunk').count(), 1);
+    async function selectedChange(index, total, marker) {
+      await page.waitForFunction(({ index, total, marker }) => {
+        const position = document.getElementById('change-position');
+        const changed = Array.from(document.querySelectorAll('#diff .current-change'));
+        return position.textContent === 'Change ' + index + ' of ' + total &&
+          changed.some(cell => cell.textContent.includes(marker));
+      }, { index, total, marker });
+      assert.equal(await page.locator('#previous').isEnabled(), index > 1, 'Previous stops at the first change');
+      assert.equal(await page.locator('#next').isEnabled(), index < total, 'Next stops at the last change');
+      await page.waitForFunction(() => {
+        const cell = document.querySelector('#diff .current-change');
+        const toolbar = document.querySelector('.diff-toolbar').getBoundingClientRect();
+        const bounds = cell.getBoundingClientRect();
+        return bounds.top >= toolbar.bottom + 10 && bounds.top < innerHeight - 20;
+      }, null, { timeout: 5000 });
+    }
+    async function captureNavigation(name) {
+      if (!artifacts) return;
+      await page.waitForFunction(() => {
+        const cell = document.querySelector('#diff .current-change').getBoundingClientRect();
+        const toolbar = document.querySelector('.diff-toolbar').getBoundingClientRect();
+        return Math.abs(cell.top - toolbar.bottom - 12) < 2;
+      });
+      await page.screenshot({ path: path.join(artifacts, name) });
+    }
+    async function panDiff() {
+      return page.locator('#diff, #diff .d2h-file-diff, #diff .d2h-file-side-diff').evaluateAll(elements => {
+        return elements.filter(el => el.scrollWidth > el.clientWidth).map(el => {
+          el.scrollLeft = Math.min(80, el.scrollWidth - el.clientWidth);
+          return { className: el.className, offset: el.scrollLeft };
+        });
+      });
+    }
+    async function assertDiffPan(expected) {
+      const actual = await page.locator('#diff, #diff .d2h-file-diff, #diff .d2h-file-side-diff').evaluateAll(elements =>
+        elements.filter(el => el.scrollWidth > el.clientWidth).map(el => ({ className: el.className, offset: el.scrollLeft })));
+      assert.ok(expected.some(el => el.offset > 0), 'the no-wrap fixture is horizontally panned');
+      assert.deepEqual(actual, expected, 'Previous/Next preserves horizontal scroll when lines do not wrap');
+    }
+    async function stepChange(direction, index, total, marker) {
+      await page.locator('#' + direction).click();
+      await selectedChange(index, total, marker);
+    }
+    await selectedChange(1, 2, 'value1');
+    await stepChange('next', 2, 2, 'value30');
     await page.locator('#layout').selectOption('side-by-side');
     assert.equal(await page.locator('.d2h-file-side-diff').count(), 2);
+    await selectedChange(2, 2, 'value30');
+    await stepChange('previous', 1, 2, 'value1');
     await page.locator('#layout').selectOption('line-by-line');
+    await selectedChange(1, 2, 'value1');
+
+    await page.getByRole('button', { name: /navigation\.js/ }).first().click();
+    await selectedChange(1, 5, 'FIRST_BLOCK_AFTER');
+    assert.equal(await page.locator('#diff .d2h-info').filter({ hasText: '@@' }).count(), 3,
+      'the real renderer groups the first three changes in one hunk');
+    await stepChange('next', 2, 5, 'INSERT_ONLY_AFTER');
+    await captureNavigation('git-change-unified-portrait.png');
+    await page.locator('#wrap').uncheck();
+    const unifiedPan = await panDiff();
+    await stepChange('next', 3, 5, 'DELETE_ONLY_ORIGINAL');
+    await assertDiffPan(unifiedPan);
+    await page.locator('#wrap').check();
+    await stepChange('next', 4, 5, 'LONG_BLOCK_AFTER_29');
+    assert.equal(await page.locator('#diff .current-change').count(), 12,
+      'the six-line replacement highlights one contiguous block of removed and added lines');
+    await stepChange('next', 5, 5, 'LAST_BLOCK_AFTER');
+    await stepChange('previous', 4, 5, 'LONG_BLOCK_AFTER_29');
+    await page.locator('#layout').selectOption('side-by-side');
+    await selectedChange(4, 5, 'LONG_BLOCK_AFTER_29');
+    assert.equal(await page.locator('#diff .current-change').count(), 12);
+    await stepChange('previous', 3, 5, 'DELETE_ONLY_ORIGINAL');
+    assert.equal(await page.locator('.d2h-file-side-diff').nth(0).locator('.current-change').count(), 1,
+      'split deletion selects the actual changed cell on the left');
+    assert.equal(await page.locator('.d2h-file-side-diff').nth(1).locator('.current-change').count(), 0);
+    await stepChange('previous', 2, 5, 'INSERT_ONLY_AFTER');
+    assert.equal(await page.locator('.d2h-file-side-diff').nth(0).locator('.current-change').count(), 0);
+    assert.equal(await page.locator('.d2h-file-side-diff').nth(1).locator('.current-change').count(), 1,
+      'split insertion selects the actual changed cell on the right');
+    await captureNavigation('git-change-split-portrait.png');
+    await page.locator('#wrap').uncheck();
+    const splitPan = await panDiff();
+    await stepChange('previous', 1, 5, 'FIRST_BLOCK_AFTER');
+    await assertDiffPan(splitPan);
+    await page.locator('#wrap').check();
+    await page.setViewportSize({ width: 844, height: 390 });
+    await stepChange('next', 2, 5, 'INSERT_ONLY_AFTER');
+    await stepChange('next', 3, 5, 'DELETE_ONLY_ORIGINAL');
+    await stepChange('next', 4, 5, 'LONG_BLOCK_AFTER_29');
+    await stepChange('next', 5, 5, 'LAST_BLOCK_AFTER');
+    await page.locator('#layout').selectOption('line-by-line');
+    await selectedChange(5, 5, 'LAST_BLOCK_AFTER');
+    await stepChange('previous', 4, 5, 'LONG_BLOCK_AFTER_29');
+    await page.setViewportSize({ width: 390, height: 844 });
+    await stepChange('previous', 3, 5, 'DELETE_ONLY_ORIGINAL');
+    await page.getByRole('button', { name: /<img onerror=alert\(1\)>\.txt/ }).first().click();
+    await selectedChange(1, 1, 'Untracked source');
+    await page.getByRole('button', { name: /app\.js/ }).first().click();
+    await selectedChange(1, 2, 'value1');
     await page.locator('#font').selectOption('18');
     await page.locator('#wrap').uncheck();
     await page.locator('#wrap').check();
-    const artifacts = process.env.MOBILE_GIT_ARTIFACTS;
     if (artifacts) {
-      fs.mkdirSync(artifacts, { recursive: true });
       await page.evaluate(() => scrollTo({ top: 0, behavior: 'instant' }));
       await page.screenshot({ path: path.join(artifacts, 'git-portrait.png'), fullPage: true });
     }
@@ -113,6 +222,8 @@ const { chromium } = require(process.env.MOBILE_GIT_PLAYWRIGHT || 'playwright');
     await page.locator('.history-row').first().click();
     await page.locator('#commit-file-list .file-open').first().click();
     await page.locator('.d2h-file-wrapper').waitFor();
+    await selectedChange(1, 2, 'value1');
+    await stepChange('next', 2, 2, 'value30');
     await page.setViewportSize({ width: 844, height: 390 });
     await page.locator('#layout').selectOption('side-by-side');
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), 'landscape page fits viewport');
@@ -124,6 +235,9 @@ const { chromium } = require(process.env.MOBILE_GIT_PLAYWRIGHT || 'playwright');
     await page.getByRole('button', { name: /binary\.bin/ }).click();
     await page.waitForFunction(() => document.body.getAttribute('aria-busy') === 'false');
     assert.match(await page.locator('#diff-note').innerText(), /Binary file/);
+    assert.equal(await page.locator('#change-position').isVisible(), false);
+    assert.equal(await page.locator('#previous').isEnabled(), false);
+    assert.equal(await page.locator('#next').isEnabled(), false);
     await page.setViewportSize({ width: 390, height: 844 });
     await page.locator('#setup-panel > summary').click();
     await page.locator('#check-tools').click();
@@ -173,7 +287,7 @@ const { chromium } = require(process.env.MOBILE_GIT_PLAYWRIGHT || 'playwright');
     assert.equal(await page.locator('#error').getAttribute('role'), 'alert');
     assert.equal(await page.locator('#error-details').evaluate(el => el.open), false);
     assert.deepEqual(errors, []);
-    console.log('PASS: portrait/landscape, real diff highlighting, HTML escaping, hunk controls, staging, commit, history, binary fallback, friendly tool checks and failed repository switch (' + calls.length + ' SSH requests).');
+    console.log('PASS: portrait/landscape, real diff highlighting, HTML escaping, change-block navigation and visible scrolling in both layouts, staging, commit, history, binary fallback, friendly tool checks and failed repository switch (' + calls.length + ' SSH requests).');
   } finally {
     if (browser) await browser.close();
     await new Promise(resolve => server.close(resolve));

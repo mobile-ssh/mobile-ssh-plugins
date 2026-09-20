@@ -14,17 +14,22 @@ contents do not pass through a hosted service or an additional server process.
    a Git project. Technical details stay collapsed below that guidance.
 3. Select a file under **Staged**, **Unstaged**, or **Untracked** to review its
    patch. Unified view is the default; split view, wrapping, text size, and
-   previous/next change controls are available.
+   previous/next change controls are available. The buttons move between blocks
+   of adjacent added or removed lines, including separate edits within one Git
+   hunk. **Change 1 of N** shows your position; navigation stops at either end.
+   A file with one change shows **Change 1 of 1** with both buttons disabled.
+   The selected block stays selected when switching between unified and split
+   views, and navigation brings it below the toolbar.
 4. Stage or unstage whole files, enter a commit message, then commit the staged
    changes. Fetch, pull, and push use the current branch's configured upstream.
 
-Use **Terminal** to return to the SSH terminal. The Android **Git tools** action
-opens lazygit in an interactive terminal pane for branch changes, hunk staging,
-stash, rebase, conflicts, and operations requiring an interactive prompt. The
-plugin's setup controls can check for Git, lazygit, and delta and install the
-optional terminal tools through the host's recipe approval interface. Terminal
-tool installation is separate from the touch interface; Git alone is sufficient
-for the touch interface.
+Use the app header's **Back** control to return to the previous screen. The
+Android **Git tools** action opens lazygit in an interactive terminal pane for
+branch changes, hunk staging, stash, rebase, conflicts, and operations requiring
+an interactive prompt. The plugin's setup controls can check for Git, lazygit,
+and delta and install optional terminal tools through the host's recipe approval
+interface. Terminal tool installation is separate from the touch interface;
+Git alone is sufficient for the touch interface.
 
 Expand **Git tools setup** and tap **Check tools** to see a status and compact
 version for each tool. Installed tools do not offer an install action. Missing

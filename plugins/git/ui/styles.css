@@ -33,5 +33,5 @@ pre { white-space:pre-wrap; overflow-wrap:anywhere; font:12px/1.5 monospace; max
 #diff .d2h-code-linenumber { width:4.5em; } #diff .d2h-code-side-linenumber { width:3em; }
 #diff .line-num1, #diff .line-num2 { width:50%; padding:0 1px; }
 #diff .d2h-code-line-ctn { user-select:text; } #diff.wrap-lines .d2h-code-line-ctn { white-space:pre-wrap; overflow-wrap:anywhere; word-break:break-word; } #diff.wrap-lines .d2h-diff-table { table-layout:fixed; }
-#diff.wrap-lines .d2h-code-line, #diff.wrap-lines .d2h-code-side-line { width:100%; } #diff .d2h-info { scroll-margin-top:180px; } #diff .current-hunk { outline:2px solid var(--accent); outline-offset:-2px; }
+#diff.wrap-lines .d2h-code-line, #diff.wrap-lines .d2h-code-side-line { width:100%; } #diff .current-change { box-shadow:inset 3px 0 var(--accent); }
 @media(min-width:850px) { body { max-width:1250px; margin:auto; } #files { display:grid; grid-template-columns:1fr 1fr; gap:0 24px; } .diff-toolbar { gap:14px; } }

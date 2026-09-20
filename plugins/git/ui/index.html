@@ -10,7 +10,7 @@
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-  <header><h1>Git</h1><button id="terminal" class="secondary" data-i18n="terminal">Terminal</button></header>
+  <header><h1>Git</h1></header>
   <p id="server" class="muted"></p>
   <form id="repository-form">
     <label for="repository" data-i18n="repository">Repository</label>
@@ -36,11 +36,12 @@
     <section id="history-panel" hidden><div id="history"></div><button id="more" class="secondary" data-i18n="more">More commits</button><section id="commit-files" hidden><h2 id="commit-title" dir="auto"></h2><p class="muted" data-i18n="first_parent">Compared with the first parent.</p><div id="commit-file-list"></div></section></section>
     <section id="diff-panel" hidden>
       <h2 id="diff-title" dir="auto"></h2>
-      <div class="diff-toolbar row wrap">
+      <div id="diff-toolbar" class="diff-toolbar row wrap">
         <label><span data-i18n="layout">Layout</span><select id="layout"><option value="line-by-line" data-i18n="unified">Unified</option><option value="side-by-side" data-i18n="split">Split</option></select></label>
         <label class="check"><input id="wrap" type="checkbox" checked><span data-i18n="wrap">Wrap lines</span></label>
         <label><span data-i18n="font">Text size</span><select id="font"><option value="12">12</option><option value="14" selected>14</option><option value="16">16</option><option value="18">18</option></select></label>
         <button id="previous" class="secondary" data-i18n="previous">Previous change</button><button id="next" class="secondary" data-i18n="next">Next change</button>
+        <span id="change-position" class="muted" role="status" aria-live="polite" aria-atomic="true" hidden></span>
       </div>
       <p id="diff-note" class="notice" hidden></p><pre id="diff-raw" dir="ltr" hidden></pre><div id="diff" class="wrap-lines" dir="ltr"></div>
     </section>

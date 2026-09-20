@@ -3,7 +3,7 @@
   'use strict';
   var $ = function (id) { return document.getElementById(id); };
   var client, status, session, storageKey, busy = false, ready = false;
-  var patch = '', history = [], hunks = [], hunkIndex = -1;
+  var patch = '', history = [], changes = [], changeIndex = -1;
   var dark = true, writesBlocked = false;
   var toolReport = null;
   var TOOL_IDS = ['git', 'lazygit', 'delta'];
@@ -18,11 +18,14 @@
 
   function updateControls() {
     document.querySelectorAll('button,input,textarea,select').forEach(function (el) {
-      if (el.id !== 'terminal') el.disabled = busy || !ready;
+      el.disabled = busy || !ready;
     });
     if (writesBlocked) document.querySelectorAll('.file-action,#fetch,#pull,#push').forEach(function (el) { el.disabled = true; });
     $('commit').disabled = busy || !ready || writesBlocked || !status || !status.files.some(function (f) { return f.staged && !f.conflicted; }) || !$('commit-message').value.trim() || status.files.some(function (f) { return f.conflicted; });
-    $('previous').disabled = $('next').disabled = busy || !hunks.length;
+    $('previous').disabled = busy || !ready || changeIndex <= 0;
+    $('next').disabled = busy || !ready || changeIndex < 0 || changeIndex >= changes.length - 1;
+    $('change-position').hidden = !changes.length;
+    $('change-position').textContent = changes.length ? t('change_position').replace('{current}', changeIndex + 1).replace('{total}', changes.length) : '';
     document.body.setAttribute('aria-busy', busy ? 'true' : 'false');
   }
 
@@ -52,8 +55,9 @@
 
   function resetDiff() {
     patch = '';
-    hunks = [];
-    hunkIndex = -1;
+    changes = [];
+    changeIndex = -1;
+    $('change-position').hidden = true;
     $('diff').replaceChildren();
     $('diff-panel').hidden = true;
   }
@@ -91,7 +95,8 @@
       try { patch = oid ? await client.commitDiff(oid, file) : await client.diff(file, mode === 'staged' ? 'staged' : 'unstaged'); }
       catch (e) { showDiffNote(t(e.code === 'OUTPUT_LIMIT' ? 'too_large' : 'failed')); throw e; }
       renderDiff();
-      $('diff-panel').scrollIntoView({ block: 'start' });
+      if (changes.length) scrollToChange('auto');
+      else $('diff-panel').scrollIntoView({ block: 'start' });
     }); };
     row.appendChild(open);
     if (!oid && !file.conflicted) {
@@ -110,7 +115,8 @@
     $('diff-raw').textContent = raw || '';
     $('diff-raw').hidden = !raw;
     $('diff').replaceChildren();
-    hunks = [];
+    changes = [];
+    changeIndex = -1;
     updateControls();
   }
 
@@ -132,19 +138,58 @@
     });
     viewer.draw();
     viewer.highlightCode();
-    // A split layout has two copies of every hunk. Navigate only the left table.
-    var firstSide = $('diff').querySelector('.d2h-file-side-diff');
-    hunks = Array.from((firstSide || $('diff')).querySelectorAll('.d2h-info')).filter(function (el) { return el.textContent.indexOf('@@') >= 0; });
-    hunkIndex = -1;
+    var previousIndex = changeIndex;
+    changes = collectChanges();
+    changeIndex = changes.length ? Math.max(0, Math.min(previousIndex, changes.length - 1)) : -1;
+    highlightChange();
     updateControls();
+    if (previousIndex >= 0) scrollToChange('auto');
   }
 
-  function moveHunk(direction) {
-    if (!hunks.length) return;
-    hunks.forEach(function (h) { h.classList.remove('current-hunk'); });
-    hunkIndex = hunkIndex < 0 ? (direction < 0 ? hunks.length - 1 : 0) : (hunkIndex + direction + hunks.length) % hunks.length;
-    hunks[hunkIndex].classList.add('current-hunk');
-    hunks[hunkIndex].scrollIntoView({ block: 'center', behavior: 'smooth' });
+  function collectChanges() {
+    var blocks = [];
+    $('diff').querySelectorAll('.d2h-file-wrapper').forEach(function (file) {
+      // Split tables have aligned rows, including placeholders for one-sided edits.
+      // Inspect both sides: an insertion can have no changed cell in the left table.
+      var tables = Array.from(file.querySelectorAll('.d2h-diff-tbody')).map(function (body) { return Array.from(body.children); });
+      var count = tables.reduce(function (max, rows) { return Math.max(max, rows.length); }, 0);
+      var block = null;
+      for (var row = 0; row < count; row++) {
+        var cells = [];
+        tables.forEach(function (rows) {
+          var cell = rows[row] && rows[row].children[1];
+          if (cell && (cell.classList.contains('d2h-ins') || cell.classList.contains('d2h-del'))) cells.push(cell);
+        });
+        if (!cells.length) { block = null; continue; }
+        if (!block) { block = { target: cells[0], cells: [] }; blocks.push(block); }
+        Array.prototype.push.apply(block.cells, cells);
+      }
+    });
+    return blocks;
+  }
+
+  function highlightChange() {
+    changes.forEach(function (block, index) {
+      block.cells.forEach(function (cell) { cell.classList.toggle('current-change', index === changeIndex); });
+    });
+  }
+
+  function scrollToChange(behavior) {
+    if (changeIndex < 0) return;
+    var toolbarHeight = $('diff-toolbar').getBoundingClientRect().height;
+    var top = window.scrollY + changes[changeIndex].target.getBoundingClientRect().top - toolbarHeight - 12;
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) behavior = 'auto';
+    // Scroll the page only; scrollIntoView can also reset the diff's horizontal position.
+    window.scrollTo({ top: Math.max(0, top), behavior: behavior });
+  }
+
+  function moveChange(direction) {
+    var next = changeIndex + direction;
+    if (busy || !ready || next < 0 || next >= changes.length) return;
+    changeIndex = next;
+    highlightChange();
+    updateControls();
+    scrollToChange('smooth');
   }
 
   function setTab(name) {
@@ -263,12 +308,8 @@
   $('layout').onchange = renderDiff;
   $('wrap').onchange = function () { $('diff').classList.toggle('wrap-lines', $('wrap').checked); };
   $('font').onchange = function () { document.documentElement.style.setProperty('--diff-font', $('font').value + 'px'); };
-  $('previous').onclick = function () { moveHunk(-1); };
-  $('next').onclick = function () { moveHunk(1); };
-  $('terminal').onclick = function () {
-    if (MobileSSH.ui.showTerminal) Promise.resolve(MobileSSH.ui.showTerminal()).catch(showError);
-    else MobileSSH.ui.close();
-  };
+  $('previous').onclick = function () { moveChange(-1); };
+  $('next').onclick = function () { moveChange(1); };
   $('check-tools').onclick = function () { run(t('check_tools'), function () { return checkTools(); }); };
   ['lazygit', 'delta'].forEach(function (tool) { $('install-' + tool).onclick = function () { run(t('setup'), async function () {
     if (!toolReport || !toolReport.tools.some(function (item) { return item.id === tool && item.state !== 'installed'; })

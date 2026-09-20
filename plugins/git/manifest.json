@@ -2,7 +2,7 @@
   "id": "io.github.mobilessh.git",
   "name": "Git",
   "description": "Review remote repositories with touch-friendly diffs, stage files, commit, and synchronize. Set up lazygit and delta for terminal workflows.",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "minBridgeVersion": "1.2.0",
   "category": "ide",
   "icon": "icon.svg",
