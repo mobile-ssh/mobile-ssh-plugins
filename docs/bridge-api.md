@@ -9,7 +9,7 @@ MobileSSH.version: string
 MobileSSH.session(): Promise<SessionInfo | null>
 MobileSSH.hasCapability(cap): Promise<boolean>
 
-MobileSSH.ssh.exec(command, { timeoutMs? }): Promise<{ stdout, stderr, exitCode }>
+MobileSSH.ssh.exec(command, { timeoutMs?, maxOutputBytes? }): Promise<{ stdout, stderr, exitCode }>
 MobileSSH.ssh.execStream(command, onLine(line, stream), { timeoutMs? }): Promise<{ exitCode }>
 
 MobileSSH.tunnel.open({ port, remoteHost?, backend? }): Promise<TunnelHandle>   // {id,url,scheme,backend,localPort}
@@ -24,6 +24,7 @@ MobileSSH.recipe.run(stepId?, vars?): Promise<{ ok, captures, log }>   // host s
 MobileSSH.recipe.status(): Promise<{ steps: [{ id, satisfied }] }>
 
 MobileSSH.ui.toast(msg) / setTitle(title) / openService(url) / openExternal(url) / close() / theme()
+MobileSSH.ui.showTerminal()   // bridge 1.2.0+: return to the active server's terminal screen
 //   openService  → in-app, bridge-less WebView   |   openExternal → the phone's default browser (http/https)
 MobileSSH.notify({ title, message, topic? }): Promise<void>
 MobileSSH.log(level, message)
@@ -36,6 +37,23 @@ Host adds methods → MINOR bump (old plugins keep working). Host changes/remove
 (host refuses plugins whose `minBridgeVersion` major exceeds its own).
 
 ## Streaming
+
+Bridge **1.2.0** adds optional `session().cwd` (the launching pane's last reported directory)
+and `ssh.exec`'s `maxOutputBytes`. The latter is a positive integer up to 2147483647, covering
+the combined raw bytes of stdout and stderr. Exceeding it rejects with an error message beginning
+`OUTPUT_LIMIT_EXCEEDED`; no partial result is returned. The exec channel is disconnected, but
+this does not guarantee termination of the remote process. A write may already have completed:
+refresh state and never automatically retry it. Omitting the limit keeps existing behavior.
+
+Check `MobileSSH.version >= 1.2.0` before depending on bounded output. Older hosts can silently
+ignore this option, and hosts have historically not enforced `minBridgeVersion`. `cwd` is a
+hint, may be absent, and must be validated on the server. The native host snapshots it when
+opening the plugin; it does not follow later terminal directory changes.
+
+`ui.showTerminal()` returns past the plugin hub to the active server's terminal screen.
+It requires an associated session (which may be disconnected) and only navigates: it does not
+run commands or inject input.
+`ui.close()` keeps its existing behavior of closing only the plugin screen.
 
 `ssh.execStream` and `http.fetch({stream:true}, onChunk)` deliver data incrementally — used for live
 install logs, captured auth URLs, and LLM token streams (SSE). Under the hood the shim registers a

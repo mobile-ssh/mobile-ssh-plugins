@@ -1,0 +1,15 @@
+{
+  "id": "io.github.mobilessh.git",
+  "name": "Git",
+  "description": "Review remote repositories with touch-friendly diffs, stage files, commit, and synchronize. Set up lazygit and delta for terminal workflows.",
+  "version": "1.0.2",
+  "minBridgeVersion": "1.2.0",
+  "category": "ide",
+  "icon": "icon.svg",
+  "author": "Mobile SSH",
+  "homepage": "https://github.com/mobile-ssh/mobile-ssh-plugins",
+  "capabilities": ["SSH_EXEC", "STORAGE"],
+  "sessionRequirement": "REQUIRES_ACTIVE_SESSION",
+  "ui": { "entry": "ui/index.html" },
+  "recipe": "recipe.json"
+}

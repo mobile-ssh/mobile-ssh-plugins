@@ -192,6 +192,95 @@
       ]
     },
     {
+      "id": "io.github.mobilessh.git",
+      "name": "Git",
+      "description": "Review remote repositories with touch-friendly diffs, stage files, commit, and synchronize. Set up lazygit and delta for terminal workflows.",
+      "version": "1.0.2",
+      "minBridgeVersion": "1.2.0",
+      "role": "ide",
+      "icon": "plugins/git/icon.svg",
+      "capabilities": [
+        "SSH_EXEC",
+        "STORAGE"
+      ],
+      "sessionRequirement": "REQUIRES_ACTIVE_SESSION",
+      "path": "plugins/git",
+      "files": [
+        {
+          "path": "icon.svg",
+          "sha256": "d7b5d6004e091c340e4984aee90eefd71ad405e4e3e5794eb4f0d4fb30a77c40"
+        },
+        {
+          "path": "manifest.json",
+          "sha256": "12b6a2b8fd229b78950d5631961eacf7ab0c9f032301e31de8d2690673798f73"
+        },
+        {
+          "path": "recipe.json",
+          "sha256": "33864ab6305075ac4ff4bb436871551143aa837ecc73326fca3a84aef3adbde6"
+        },
+        {
+          "path": "ui/app.js",
+          "sha256": "707f68a2d7845d711ccbe9d981d7f2bdaa3f764e55d2055cc700a111e35dcf68"
+        },
+        {
+          "path": "ui/git.js",
+          "sha256": "88a3799f2919e5d949dd484a9ef435736c7c86c2a0d404626cd299e4b8dba661"
+        },
+        {
+          "path": "ui/i18n.js",
+          "sha256": "bfccfd38735291d5f71e1aea6308217814f60ae81c4080316ee0aee90a40dd67"
+        },
+        {
+          "path": "ui/index.html",
+          "sha256": "5531b50bc2ee0f9a81e92d0576019804f5bc1d6d402e2e1f45cd099141ba0615"
+        },
+        {
+          "path": "ui/styles.css",
+          "sha256": "88c28f3bc037a36119d73f8d773d0d455c721931075bea05209cc71ef8e5e1df"
+        },
+        {
+          "path": "ui/tools.js",
+          "sha256": "d4fb187060efc6b449d11db968ffbfaa778a2eec234edade366fb4225ae00dd9"
+        },
+        {
+          "path": "ui/vendor/diff-LICENSE.txt",
+          "sha256": "eda81a415869e67809f6a9f3fd6056062cb83a462118e07eec5e92b2e0c40ce9"
+        },
+        {
+          "path": "ui/vendor/diff2html-LICENSE.md",
+          "sha256": "6de794566a8feb4233594420299cec2dbfba51ae57201763541a5e7d627cb245"
+        },
+        {
+          "path": "ui/vendor/diff2html-ui-slim.min.js",
+          "sha256": "7bf8f0b288986bce9f8a8f5d4608eadd02a715ff95135a2fa28d1a10fcad2310"
+        },
+        {
+          "path": "ui/vendor/diff2html.min.css",
+          "sha256": "d3ecc0e9b2b1e5c8466c19de29bed052fd0863475d25829ecc858446efded372"
+        },
+        {
+          "path": "ui/vendor/github-dark.css",
+          "sha256": "603240e9a7c78cbb006986228155c433b14ac61236805eaa79bfeb96d3c73f75"
+        },
+        {
+          "path": "ui/vendor/github.css",
+          "sha256": "4164771f545d87f697360d9b1fa176ce8759a9acf83f1c47212aa1c2d2e0d619"
+        },
+        {
+          "path": "ui/vendor/highlight.js-LICENSE.txt",
+          "sha256": "6c081431591d9df696c82dc598fe1423765b8a299b200ed00b281afd0f64c490"
+        },
+        {
+          "path": "ui/vendor/profoundlogic-hogan-LICENSE.txt",
+          "sha256": "0cec06e0e55fbc3dc5cee4fca9b607f66cb8f4e4dbcf3b3c013594dd156732e9"
+        },
+        {
+          "path": "ui/vendor/sources.json",
+          "sha256": "9e6d0c1dfde6442fe4eda0c70ed0f9e6fe26d30e3f6f694f9dfe82572ccc61ed"
+        }
+      ]
+    },
+    {
       "id": "io.github.mobilessh.vscode",
       "name": "VS Code",
       "description": "Run VS Code (code-server) on the remote host and open it on your phone. Run agents in its terminal.",

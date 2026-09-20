@@ -65,12 +65,22 @@ export interface SessionInfo {
   connected: boolean;
   /** `<user>@<host>:<port>` */
   label: string;
+  /** Launching pane's last reported working directory, when known (bridge 1.2.0+).
+   *  This is a hint; validate it on the server before using it as a repository. */
+  cwd?: string;
 }
 
 // ── SSH ────────────────────────────────────────────────────────────────────────
 export interface SshApi {
   /** Run a one-shot remote command on a fresh exec channel; capture stdout/stderr/exit. */
-  exec(command: string, opts?: { timeoutMs?: number }): Promise<ExecResult>;
+  exec(command: string, opts?: {
+    timeoutMs?: number;
+    /** Bridge 1.2.0+: positive integer, at most 2147483647. Combined stdout/stderr
+     *  byte limit. Rejects with OUTPUT_LIMIT_EXCEEDED rather than returning truncated
+     *  output. Omit to preserve legacy unlimited capture. Check MobileSSH.version
+     *  before relying on the limit: older shims/hosts may silently ignore it. */
+    maxOutputBytes?: number;
+  }): Promise<ExecResult>;
 
   /**
    * Run a command and receive stdout/stderr lines as they arrive (e.g. to watch an install
@@ -271,6 +281,10 @@ export interface UiApi {
   openExternal(url: string): Promise<void>;
   /** Close this plugin and return to the host. */
   close(): void;
+  /** Bridge 1.2.0+: leave the plugin/hub and focus the active server's terminal screen.
+   *  Navigation only; does not type or execute a terminal command. Requires an associated
+   *  session, which may be disconnected so the user can return to reconnect. */
+  showTerminal(): void;
   /** Host theme tokens so plugin UI matches the app (call once on load). */
   theme(): Promise<Theme>;
 }

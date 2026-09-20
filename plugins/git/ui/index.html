@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; base-uri 'none'; form-action 'none'">
+  <title>Git</title>
+  <link rel="stylesheet" href="vendor/diff2html.min.css">
+  <link rel="stylesheet" id="highlight-theme" href="vendor/github-dark.css">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header><h1>Git</h1><button id="terminal" class="secondary" data-i18n="terminal">Terminal</button></header>
+  <p id="server" class="muted"></p>
+  <form id="repository-form">
+    <label for="repository" data-i18n="repository">Repository</label>
+    <div class="row"><input id="repository" value="~" spellcheck="false" autocapitalize="none" autocomplete="off" dir="ltr"><button type="submit" id="open" data-i18n="open">Open</button></div>
+  </form>
+  <p id="activity" role="status" aria-live="polite"></p>
+  <section id="error" class="notice" role="alert" hidden><p id="error-message"></p><details id="error-details"><summary data-i18n="details">Details</summary><pre id="error-detail" dir="ltr"></pre></details></section>
+  <main id="workspace" hidden>
+    <p id="branch" class="branch" dir="auto"></p>
+    <nav class="row wrap" aria-label="Git">
+      <button id="refresh" class="secondary" data-i18n="refresh">Refresh</button>
+      <button id="fetch" class="secondary" data-i18n="fetch">Fetch</button>
+      <button id="pull" class="secondary" data-i18n="pull">Pull (fast-forward)</button>
+      <button id="push" class="secondary" data-i18n="push">Push</button>
+    </nav>
+    <div class="tabs row"><button id="changes-tab" aria-pressed="true" data-i18n="changes">Changes</button><button id="history-tab" aria-pressed="false" class="secondary" data-i18n="history">History</button></div>
+    <section id="changes-panel">
+      <div id="files"></div>
+      <label for="commit-message" data-i18n="commit_message">Commit message</label>
+      <textarea id="commit-message" rows="3" spellcheck="true" dir="auto"></textarea>
+      <button id="commit" data-i18n="commit">Commit staged files</button>
+    </section>
+    <section id="history-panel" hidden><div id="history"></div><button id="more" class="secondary" data-i18n="more">More commits</button><section id="commit-files" hidden><h2 id="commit-title" dir="auto"></h2><p class="muted" data-i18n="first_parent">Compared with the first parent.</p><div id="commit-file-list"></div></section></section>
+    <section id="diff-panel" hidden>
+      <h2 id="diff-title" dir="auto"></h2>
+      <div class="diff-toolbar row wrap">
+        <label><span data-i18n="layout">Layout</span><select id="layout"><option value="line-by-line" data-i18n="unified">Unified</option><option value="side-by-side" data-i18n="split">Split</option></select></label>
+        <label class="check"><input id="wrap" type="checkbox" checked><span data-i18n="wrap">Wrap lines</span></label>
+        <label><span data-i18n="font">Text size</span><select id="font"><option value="12">12</option><option value="14" selected>14</option><option value="16">16</option><option value="18">18</option></select></label>
+        <button id="previous" class="secondary" data-i18n="previous">Previous change</button><button id="next" class="secondary" data-i18n="next">Next change</button>
+      </div>
+      <p id="diff-note" class="notice" hidden></p><pre id="diff-raw" dir="ltr" hidden></pre><div id="diff" class="wrap-lines" dir="ltr"></div>
+    </section>
+  </main>
+  <details id="setup-panel"><summary data-i18n="setup">Git tools setup</summary>
+    <p class="muted" data-i18n="tools_intro">Check what’s available on this server. Git is required; lazygit and delta are optional.</p>
+    <button id="check-tools" class="secondary" data-i18n="check_tools">Check tools</button>
+    <p id="tools-summary" class="tools-summary" role="status" aria-live="polite" hidden></p>
+    <div class="tool-list">
+      <section id="tool-git" class="tool-card" aria-label="Git">
+        <div class="tool-heading"><div class="tool-name"><strong>Git</strong><span id="tool-git-version" class="tool-version" dir="ltr" hidden></span></div><span id="tool-git-status" class="tool-status" data-i18n="tool_not_checked">Not checked</span></div>
+        <p class="muted" data-i18n="tool_git_description">Required for reviewing and changing files.</p>
+        <p id="tool-git-help" class="tool-help" data-i18n="tools_git_install_help" hidden>Install Git using your server’s package manager, then check again.</p>
+      </section>
+      <section id="tool-lazygit" class="tool-card" aria-label="lazygit">
+        <div class="tool-heading"><div class="tool-name"><strong>lazygit</strong><span id="tool-lazygit-version" class="tool-version" dir="ltr" hidden></span></div><span id="tool-lazygit-status" class="tool-status" data-i18n="tool_not_checked">Not checked</span></div>
+        <p class="muted" data-i18n="tool_lazygit_description">Optional interactive Git terminal.</p>
+        <button id="install-lazygit" class="secondary" data-i18n="tools_install" hidden>Install</button>
+      </section>
+      <section id="tool-delta" class="tool-card" aria-label="delta">
+        <div class="tool-heading"><div class="tool-name"><strong>delta</strong><span id="tool-delta-version" class="tool-version" dir="ltr" hidden></span></div><span id="tool-delta-status" class="tool-status" data-i18n="tool_not_checked">Not checked</span></div>
+        <p class="muted" data-i18n="tool_delta_description">Optional syntax highlighting for terminal diffs.</p>
+        <button id="install-delta" class="secondary" data-i18n="tools_install" hidden>Install</button>
+      </section>
+    </div>
+    <p id="tools-install-note" class="muted" data-i18n="tools_install_note" hidden>You’ll review the installation command before it runs.</p>
+    <details id="tools-details" hidden><summary data-i18n="details">Details</summary><pre id="tools" dir="ltr"></pre></details>
+    <p class="muted" data-i18n="advanced">Use Git tools in the terminal for branches, rebase, conflicts, and interactive authentication.</p>
+  </details>
+  <script src="i18n.js"></script><script src="vendor/diff2html-ui-slim.min.js"></script><script src="git.js"></script><script src="tools.js"></script><script src="app.js"></script>
+</body>
+</html>

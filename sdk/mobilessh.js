@@ -18,7 +18,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '1.1.0';
+  var VERSION = '1.2.0';
 
   if (window.MobileSSH) return; // already injected
 
@@ -126,7 +126,9 @@
 
     ssh: {
       exec: function (command, opts) {
-        return invoke('ssh.exec', { command: command, timeoutMs: (opts && opts.timeoutMs) || 0 });
+        var args = { command: command, timeoutMs: (opts && opts.timeoutMs) || 0 };
+        if (opts && opts.maxOutputBytes !== undefined) args.maxOutputBytes = opts.maxOutputBytes;
+        return invoke('ssh.exec', args);
       },
       execStream: function (command, onLine, opts) {
         return invokeStream(
@@ -179,6 +181,7 @@
       openService: function (url) { return invoke('ui.openService', { url: url }); },
       openExternal: function (url) { return invoke('ui.openExternal', { url: url }); },
       close: function () { invoke('ui.close', {}).catch(function () {}); },
+      showTerminal: function () { invoke('ui.showTerminal', {}).catch(function () {}); },
       theme: function () { return invoke('ui.theme', {}); },
     },
 
