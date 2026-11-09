@@ -27,7 +27,7 @@
       "type": "array",
       "uniqueItems": true,
       "items": {
-        "enum": ["SSH_EXEC", "TUNNEL", "HTTP_LOOPBACK", "HTTP_INTERNET", "STORAGE", "NOTIFICATIONS", "SERVERS_MANAGE"]
+        "enum": ["SSH_EXEC", "TUNNEL", "HTTP_LOOPBACK", "HTTP_INTERNET", "STORAGE", "NOTIFICATIONS", "SERVERS_MANAGE", "WORKFLOWS", "SSH_AUTOMATION", "VPN_PROFILES_MANAGE"]
       }
     },
     "sessionRequirement": {
@@ -40,6 +40,15 @@
       "additionalProperties": false,
       "properties": {
         "entry": { "description": "Relative path to the plugin's HTML entry, e.g. ui/index.html", "type": "string" }
+      }
+    },
+    "workflow": {
+      "type": "object",
+      "required": ["version", "worker"],
+      "additionalProperties": false,
+      "properties": {
+        "version": { "const": 1 },
+        "worker": { "type": "string", "minLength": 1 }
       }
     },
     "recipe": {

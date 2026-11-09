@@ -41,6 +41,7 @@ export interface MobileSSHBridge {
   http: HttpApi;
   storage: StorageApi;
   servers: ServersApi;
+  workflows: WorkflowsApi;
   recipe: RecipeApi;
   ui: UiApi;
   notify(opts: NotifyOptions): Promise<void>;
@@ -54,7 +55,40 @@ export type Capability =
   | 'HTTP_INTERNET'    // http.fetch to arbitrary hosts (loud disclosure required)
   | 'STORAGE'          // plugin-scoped key/value (+ encrypted secrets)
   | 'NOTIFICATIONS'    // post a local notification / ntfy
-  | 'SERVERS_MANAGE';  // create/remove saved-server rows THIS plugin owns (never read the user's)
+  | 'SERVERS_MANAGE'  // create/remove saved-server rows THIS plugin owns (never read the user's)
+  | 'WORKFLOWS'
+  | 'SSH_AUTOMATION'
+  | 'VPN_PROFILES_MANAGE';
+
+/** Bridge 1.3: durable native operations. Credentials and approvals require review(). */
+export interface WorkflowJob {
+  id: string;
+  pluginId: string;
+  deploymentId: string;
+  operation: 'setup' | 'health' | 'createClient' | 'revokeClient' | 'delete';
+  status: 'READY' | 'RUNNING' | 'WAITING_INPUT' | 'PAUSED' | 'SUCCEEDED' | 'FAILED' | 'CANCELLED';
+  revision: number;
+  state: Record<string, unknown>;
+  pendingStep: ({ id: string; kind: string; form?: string } & Record<string, unknown>) | null;
+  createdAt: number;
+  updatedAt: number;
+}
+export interface WorkflowsApi {
+  create(options: { operation?: WorkflowJob['operation']; inputs?: Record<string, unknown> }): Promise<WorkflowJob>;
+  list(): Promise<WorkflowJob[]>;
+  get(options: { id: string }): Promise<WorkflowJob>;
+  answer(options: { id: string; revision: number; requestId: string; value: Record<string, unknown> }): Promise<WorkflowJob>;
+  resume(options: { id: string; revision: number }): Promise<WorkflowJob>;
+  cancel(options: { id: string; revision: number }): Promise<WorkflowJob>;
+  review(options: { id: string }): Promise<WorkflowJob>;
+  openVpn(options: { id: string }): Promise<{ opened: boolean }>;
+  /** Native-only review, file save or QR display. No configuration text is returned. */
+  export(options: { id: string; clientId?: string }): Promise<{ opened: boolean }>;
+  /** Open the owned server's administration over a native loopback SSH tunnel. */
+  openAdmin(options: { id: string }): Promise<{ opened: boolean }>;
+  forgetCredential(options: { id: string }): Promise<{ forgotten: boolean }>;
+  subscribe(options: { id: string }, onState: (job: WorkflowJob) => void): () => void;
+}
 
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 

@@ -56,6 +56,15 @@ for (const dir of pluginDirs()) {
 
   if (!existsSync(join(base, manifest.ui.entry))) fail(dir, `ui.entry not found: ${manifest.ui.entry}`);
   if (manifest.icon && !existsSync(join(base, manifest.icon))) fail(dir, `icon not found: ${manifest.icon}`);
+  if (manifest.workflow) {
+    const worker = manifest.workflow.worker;
+    if (!/^(?!\/)(?!.*(?:^|\/)\.\.(?:\/|$))[A-Za-z0-9_./-]+\.js$/.test(worker) ||
+        !existsSync(join(base, worker))) fail(dir, `workflow.worker missing or unsafe: ${worker}`);
+    if (!manifest.capabilities.includes('WORKFLOWS')) fail(dir, 'workflow requires WORKFLOWS capability');
+    const version = /^(\d+)\.(\d+)\.(\d+)$/.exec(manifest.minBridgeVersion || '');
+    if (!version || Number(version[1]) < 1 || Number(version[1]) === 1 && Number(version[2]) < 3)
+      fail(dir, 'workflow requires minBridgeVersion 1.3.0 or newer');
+  }
 
   // HTTP_INTERNET is a sensitive capability — require it to be intentional.
   if ((manifest.capabilities || []).includes('HTTP_INTERNET') &&

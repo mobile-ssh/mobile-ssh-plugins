@@ -18,7 +18,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '1.2.0';
+  var VERSION = '1.3.0';
 
   if (window.MobileSSH) return; // already injected
 
@@ -123,6 +123,29 @@
 
     session: function () { return invoke('session', {}); },
     hasCapability: function (cap) { return invoke('hasCapability', { cap: cap }); },
+
+    workflows: {
+      create: function (options) { return invoke('workflows.create', options || {}); },
+      list: function () { return invoke('workflows.list', {}); },
+      get: function (options) { return invoke('workflows.get', options); },
+      answer: function (options) { return invoke('workflows.answer', options); },
+      resume: function (options) { return invoke('workflows.resume', options); },
+      cancel: function (options) { return invoke('workflows.cancel', options); },
+      review: function (options) { return invoke('workflows.review', options); },
+      openVpn: function (options) { return invoke('workflows.openVpn', options); },
+      export: function (options) { return invoke('workflows.export', options); },
+      openAdmin: function (options) { return invoke('workflows.openAdmin', options); },
+      forgetCredential: function (options) { return invoke('workflows.forgetCredential', options); },
+      subscribe: function (options, onState) {
+        var stopped = false, timer = null, revision = -1;
+        function poll() { if (stopped) return;
+          invoke('workflows.get', options).then(function (job) {
+            if (!stopped && job.revision !== revision) { revision = job.revision; onState(job); }
+          }).catch(function () {}).then(function () { if (!stopped) timer = setTimeout(poll, 1000); });
+        }
+        poll(); return function () { stopped = true; if (timer !== null) clearTimeout(timer); };
+      },
+    },
 
     ssh: {
       exec: function (command, opts) {

@@ -17,7 +17,7 @@ function mock() {
 test('bounded exec sends byte limit and preserves NUL output', async () => {
   const m = mock();
   const result = m.window.MobileSSH.ssh.exec('git status', { maxOutputBytes: 2097152, timeoutMs: 500 });
-  assert.equal(m.window.MobileSSH.version, '1.2.0');
+  assert.equal(m.window.MobileSSH.version, '1.3.0');
   assert.deepEqual(m.request(), { method: 'ssh.exec', args: {
     command: 'git status', timeoutMs: 500, maxOutputBytes: 2097152
   } });
@@ -45,4 +45,18 @@ test('terminal navigation does not pass a command or credentials', () => {
   m.window.MobileSSH.ui.showTerminal();
   assert.deepEqual(m.request(), { method: 'ui.showTerminal', args: {} });
   m.window.__mobileSSH._resolve('request', null, null);
+});
+
+test('workflow replies carry revision guards and native export never returns configuration', async () => {
+  const m = mock();
+  const answer = m.window.MobileSSH.workflows.answer({ id: 'job', revision: 8, requestId: 'provider', value: { provider: 'gcp' } });
+  assert.deepEqual(m.request(), { method: 'workflows.answer', args: {
+    id: 'job', revision: 8, requestId: 'provider', value: { provider: 'gcp' }
+  } });
+  m.window.__mobileSSH._resolve('request', null, '{"id":"job","revision":9}');
+  assert.equal((await answer).revision, 9);
+  const exported = m.window.MobileSSH.workflows.export({ id: 'job', clientId: '1' });
+  assert.deepEqual(m.request(), { method: 'workflows.export', args: { id: 'job', clientId: '1' } });
+  m.window.__mobileSSH._resolve('request', null, '{"opened":true}');
+  assert.equal((await exported).opened, true);
 });

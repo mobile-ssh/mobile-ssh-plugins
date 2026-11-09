@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none'">
+<title>VPN Setup</title><link rel="stylesheet" href="styles.css"></head>
+<body><header><img src="../icon.svg" alt=""><div><h1>VPN Setup</h1><p>Your cloud. Your VPN.</p></div></header>
+<main><p id="notice" role="status" aria-live="polite">Loading saved workflows…</p>
+<button id="new">Set up a VPN</button><label for="jobs">Deployment or workflow</label><select id="jobs" aria-label="Saved workflows"></select>
+<section id="current" hidden><h2 id="title"></h2><p id="status"></p><p id="endpoint"></p><p id="question"></p>
+<button id="review" hidden>Continue setup</button><div class="actions"><button id="resume" class="secondary">Resume</button><button id="cancel" class="secondary">Stop workflow</button></div>
+<p class="muted">Stopping a workflow keeps resources already created. Cloud billing continues until those resources are deleted.</p>
+<details><summary>Resources</summary><ul id="resources"></ul></details>
+<div id="manage" hidden><h2>Manage VPN</h2><button id="connect">Open VPN profiles</button><div class="actions"><button id="health" class="secondary">Check server</button><button id="client" class="secondary">Add client</button></div>
+<label for="clients">VPN client</label><select id="clients"></select><button id="revoke" class="secondary">Revoke selected client</button>
+<div class="actions"><button id="export" class="secondary">Export client / QR</button><button id="admin" class="secondary">Open admin</button></div>
+<button id="delete" class="danger">Delete deployment</button></div>
+<button id="forget" class="secondary" hidden>Forget cloud account credentials</button></section>
+<details><summary>Cloud console guides</summary><p>Use the console method when you prefer to create the server yourself. Keep its public IP and SSH key ready.</p>
+<ul><li><a href="../guides/existing.md">Existing public server</a></li><li><a href="../guides/gcp.md">Google Cloud</a></li><li><a href="../guides/aws.md">AWS Lightsail and EC2</a></li><li><a href="../guides/azure.md">Azure</a></li><li><a href="../guides/digitalocean.md">DigitalOcean</a></li><li><a href="../guides/hetzner.md">Hetzner</a></li><li><a href="../guides/linode.md">Akamai / Linode</a></li><li><a href="../guides/vultr.md">Vultr</a></li><li><a href="../guides/oci.md">Oracle Cloud</a></li><li><a href="../guides/ovh.md">OVHcloud</a></li><li><a href="../guides/scaleway.md">Scaleway</a></li></ul></details>
+</main><script src="app.js"></script></body></html>

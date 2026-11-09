@@ -1,0 +1,14 @@
+{
+  "id": "io.github.mobilessh.vpnsetup",
+  "name": "VPN Setup",
+  "description": "Create a cloud WireGuard VPN, register it in Mobile SSH, and manage its clients and cloud resources with a guided, resumable workflow.",
+  "version": "1.0.0",
+  "minBridgeVersion": "1.3.0",
+  "category": "connectivity",
+  "icon": "icon.svg",
+  "author": "Mobile SSH",
+  "capabilities": ["WORKFLOWS", "SSH_AUTOMATION", "VPN_PROFILES_MANAGE", "HTTP_INTERNET", "STORAGE", "SERVERS_MANAGE"],
+  "sessionRequirement": "STANDALONE",
+  "ui": {"entry": "ui/index.html"},
+  "workflow": {"version": 1, "worker": "worker.js"}
+}
