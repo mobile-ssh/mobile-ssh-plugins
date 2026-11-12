@@ -197,6 +197,79 @@ test('Hetzner IPv4 422 after a verified detach still requires review without bli
   assert.equal(current.step.method,'GET');assert.equal(current.state.httpStage,'deleteCheck');
 });
 
+function hetznerFirewallCleanup(){
+  const prior=state('hetzner');prior.phase='cleanup';prior.index=1;prior.httpStage='delete';
+  prior.resources={key:{id:11,owned:true,status:'created'},firewall:{id:22,owned:true,status:'created'},
+    address:{id:44,owned:true,status:'deleted'},server:{id:33,owned:true,status:'deleted'}};
+  return plain(worker.next(prior,{type:'resume'}));
+}
+
+test('Hetzner firewall still in use after its server is gone is deleted again after a wait',()=>{
+  let current=hetznerFirewallCleanup();
+  assert.equal(current.step.method,'DELETE');assert.match(current.step.url,/firewalls\/22$/);
+  for(let count=1;count<=3;count++){
+    current=result(current,{error:{code:'resource_in_use',message:'firewall with ID 22 is still in use'}},422);
+    assert.equal(current.step.kind,'delay');assert.equal(current.state.attempt,count);
+    assert.equal(current.state.resources.firewall.status,'created');
+    current=result(current,{});
+    assert.equal(current.step.method,'DELETE');assert.match(current.step.url,/firewalls\/22$/);
+  }
+  current=result(current,{},204);
+  assert.equal(current.step.kind,'delay');
+  current=result(current,{});
+  assert.equal(current.step.method,'GET');assert.equal(current.state.httpStage,'deleteRead');
+  current=result(current,{},404);
+  assert.equal(current.state.resources.firewall.status,'deleted');
+  assert.equal(current.step.method,'DELETE');assert.match(current.step.url,/ssh_keys\/11$/);
+});
+
+test('Hetzner locked or conflicting deletions retry, other providers and the primary IPv4 still pause',()=>{
+  for(const [status,code] of [[409,'conflict'],[423,'locked'],[409,'locked']]){
+    let current=result(hetznerFirewallCleanup(),{error:{code,message:'action in progress'}},status);
+    assert.equal(current.step.kind,'delay',code);
+    current=result(current,{});
+    assert.equal(current.step.method,'DELETE',code);
+  }
+  const other=result(hetznerFirewallCleanup(),{error:{code:'invalid_input',message:'invalid input'}},422);
+  assert.equal(other.step.form,'recovery');
+  const prior=state('digitalocean');prior.phase='cleanup';prior.index=3;prior.httpStage='delete';
+  prior.resources.firewall={id:'fw-id',owned:true,status:'created'};
+  const digitalocean=result(plain(worker.next(prior,{type:'resume'})),{id:'unprocessable_entity',message:'resource in use'},422);
+  assert.equal(digitalocean.step.form,'recovery');
+  const address=result(result(hetznerAddressCleanup(),{primary_ip:{id:44,assignee_id:null}}),{error:{code:'resource_in_use'}},422);
+  assert.equal(address.step.form,'recovery');assert.equal(address.state.resources.address.status,'created');
+});
+
+test('Hetzner in-use deletion retries are bounded by the polling limit and keep the receipt',()=>{
+  let current=hetznerFirewallCleanup(),deletes=0;
+  while(current.step.kind!=='input'){
+    assert.equal(current.step.method,'DELETE');
+    current=result(current,{error:{code:'resource_in_use',message:'firewall with ID 22 is still in use'}},422);deletes++;
+    assert.ok(deletes<=61,'in-use retries must terminate');
+    if(current.step.kind==='delay')current=result(current,{});
+  }
+  assert.equal(deletes,61);assert.equal(current.step.form,'recovery');
+  assert.match(current.state.error.message,/polling limit \(HTTP 422, resource_in_use: firewall with ID 22 is still in use\)/);
+  assert.equal(current.state.resources.firewall.status,'created');
+  current=plain(worker.next(current.state,{type:'input',value:{action:'retry'}}));
+  assert.equal(current.step.method,'DELETE');assert.match(current.step.url,/firewalls\/22$/);
+});
+
+test('a provider pause names the error code and a short message without headers or tokens',()=>{
+  const token='hcloudSecretTokenValue0123456789abcdefABCDEF';
+  const current=result(hetznerFirewallCleanup(),{error:{code:'forbidden',
+    message:'token '+token+' lacks write access to this project and '+'more detail '.repeat(20)}},403,{headers:{authorization:'Bearer header-secret'}});
+  assert.equal(current.step.form,'recovery');
+  const text=current.state.error.message;
+  assert.match(text,/^Cloud firewall deletion failed \(HTTP 403, forbidden: token \[redacted\] lacks write access/);
+  assert.match(text,/\.\.\.\)\. Remaining resources are retained for retry\.$/);
+  assert.ok(text.length<220,text);
+  assert.ok(!JSON.stringify(current.state).includes(token));
+  assert.ok(!JSON.stringify(current.state).includes('header-secret'));
+  const unsafe=result(hetznerFirewallCleanup(),{error:{code:'not a code <b>',message:'denied'}},403);
+  assert.match(unsafe.state.error.message,/\(HTTP 403: denied\)/);
+});
+
 test('client mutations require a fresh confirmation but health does not',()=>{
   const prior=state('azure');prior.phase='ready';prior.host='8.8.4.4';
   for(const operation of ['createClient','revokeClient']){

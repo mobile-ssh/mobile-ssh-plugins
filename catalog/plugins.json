@@ -46,7 +46,7 @@
       "id": "io.github.mobilessh.vpnsetup",
       "name": "VPN Setup",
       "description": "Create a cloud WireGuard VPN, register it in Mobile SSH, and manage its clients and cloud resources with a guided, resumable workflow.",
-      "version": "1.0.0",
+      "version": "1.0.1",
       "minBridgeVersion": "1.3.0",
       "role": "connectivity",
       "icon": "plugins/vpnsetup/icon.svg",
@@ -63,7 +63,7 @@
       "files": [
         {
           "path": "README.md",
-          "sha256": "cfca40b034fa3a35c757de31cf70c76c1f06a58e4b2679659d02b7170bea76fb"
+          "sha256": "601e2ea70ec09d8eba57e65d5c5a83bf1936455e98fcaeaa15a9de74f0e007f7"
         },
         {
           "path": "guides/aws.md",
@@ -115,7 +115,7 @@
         },
         {
           "path": "manifest.json",
-          "sha256": "4847169a2af2c4a432ba79b9c7c7e2655b176ab03ab9fc051cbfd661e7910431"
+          "sha256": "1f40e9de1c0c57b2d1e8315f06951b8cf6269b96b4beb29d96d69a5bdd0dd45d"
         },
         {
           "path": "server/vpn.py",
@@ -126,24 +126,28 @@
           "sha256": "1e6043b11d94a2f2df301e5ac5d370e3cf1acc1b5e24abfbaf3b3c8c0cb8fb22"
         },
         {
+          "path": "tests/ui.test.cjs",
+          "sha256": "78f508057288d33d7db455e35dc79369522622af8f6adeb0e9accf51c0bf62b1"
+        },
+        {
           "path": "tests/worker.test.cjs",
-          "sha256": "61928da2102006ae0df11e51555e2cf2ad748586de444828c72bf521a91fa91d"
+          "sha256": "74720707dee77fbda68b98f71c8f193d9ce6e2420257271029efa3d2daab7cef"
         },
         {
           "path": "ui/app.js",
-          "sha256": "36e8dc0118fe2d44b8ef2ebc23316db933643982cd700201562a36f3e5af717f"
+          "sha256": "f0eedc381ef2219867bf4da4e5e6af9c1ba35da8d6dc0ca20ca16ba5825b8d46"
         },
         {
           "path": "ui/index.html",
-          "sha256": "3b7399b86dd5f5cef851a76ddc39cc72f58566d3be8c90b37076fd0bfb3c80c3"
+          "sha256": "45b4f7df9e5a839948a89b1c9ee73bb665ce82a1e665d95530b27c220ac5e4df"
         },
         {
           "path": "ui/styles.css",
-          "sha256": "54d7e6e06bb0f43c252f79740e6e24541f9672dba2009e0ee8d9254c73731582"
+          "sha256": "e14e731d93dc7d2b80245301eb127a26639eab58e941cab06283c6d59f278c2f"
         },
         {
           "path": "worker.js",
-          "sha256": "477135dd3ce53d2ed025f3fcdd21875e0e56cb88846d6120543dc4298dd8ac8a"
+          "sha256": "b88e111cee6e9562159f40f915fedf921156a6837456fb3bed9256911c341292"
         }
       ]
     },

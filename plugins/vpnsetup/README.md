@@ -39,11 +39,19 @@ API even when SSH is unavailable. Console-created VMs remain the user's cloud
 resources; the plugin removes its managed VPN installation, and the console
 guide explains how to remove the VM and public IP.
 
+The page lists each deployment once, with its recent operations underneath.
+It acts on the deployment's unfinished operation first and offers no new one
+until that operation finishes. Opening the page never starts a setup.
+
 Every resource receipt retains its provider ID, ownership and deletion status.
 A lost creation response is reconciled against a stable deployment name;
 ambiguous/missing matches pause for review instead of blindly repeating the
-creation. Deletions poll until the provider confirms removal. Canceling a job
-does not delete resources or stop charges. Resume or review cleanup afterward.
+creation. Deletions poll until the provider confirms removal. A Hetzner
+resource that is still in use or locked just after its server is deleted is
+deleted again after a wait, within the same polling limit. A deletion that
+pauses shows the provider's error code and a short, capped message. Canceling
+a job does not delete resources or stop charges. Resume or review cleanup
+afterward.
 
 Only UDP 51820 is exposed for WireGuard; TCP 51821 binds to 127.0.0.1 and can be
 accessed through an SSH tunnel. TCP 22 is limited to the selected source CIDR.

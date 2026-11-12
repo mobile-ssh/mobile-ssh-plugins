@@ -400,6 +400,24 @@
     const code=get(b,'__type',get(b,'code',get(b,'error.code','')));
     return status===404||(s.provider==='aws'&&status===400&&/(^|[.#:])NotFoundException$/.test(String(code)));
   }
+  // Pause text for a provider error. Bodies are untrusted: keep only an identifier-like
+  // code and the structured error object's message, without token-like runs and capped.
+  // Response headers are never read; other free-form body text stays out of the journal.
+  function providerError(status,b) {
+    const e=get(b,'error',{}),code=[get(e,'code'),get(e,'status'),get(b,'__type'),get(b,'code'),get(b,'type'),get(b,'id')]
+      .find(x=>typeof x==='string'&&/^[A-Za-z0-9_.:#-]{1,64}$/.test(x));
+    let text=typeof get(e,'message')==='string'?e.message.replace(/[A-Za-z0-9+/=_-]{24,}/g,'[redacted]').replace(/[\s\u0000-\u001f\u007f]+/g,' ').trim():'';
+    if(text.length>120)text=text.slice(0,117)+'...';
+    return 'HTTP '+status+(code?', '+code:'')+(text?': '+text:'');
+  }
+  // Hetzner keeps a firewall applied, or a resource locked by a running action, for a
+  // short time after its server is gone. Repeating the DELETE is safe and stays within
+  // the polling limit. The primary IPv4 already waits for a verified detach instead.
+  function busyDelete(s,op,status,b) {
+    const code=get(b,'error.code');
+    return s.provider==='hetzner'&&s.httpStage==='delete'&&op.key!=='address'&&
+      ((status===422&&code==='resource_in_use')||((status===409||status===423)&&(code==='locked'||code==='conflict')));
+  }
   function absentCreation(s) {
     if(s.allowRecreate){delete s.allowRecreate;delete s.creationAbsent;s.httpStage='create';return render(s);}
     s.creationAbsent=true;
@@ -551,18 +569,18 @@
       }
       if(event.type!=='result')return render(s);
       if(s.phase==='wait'){s.phase='provision';s.httpStage='read';return render(s);}
-      if(s.phase==='cleanupWait'){s.phase='cleanup';if(s.httpStage!=='deleteCheck')s.httpStage='deleteRead';return render(s);}
+      if(s.phase==='cleanupWait'){s.phase='cleanup';if(!['deleteCheck','deleteRetry'].includes(s.httpStage))s.httpStage='deleteRead';return render(s);}
       if(s.phase==='extraWait'){s.phase='cleanupExtra';s.httpStage='deleteRead';return render(s);}
       const b=body(event),status=get(event,'result.status',200);
       if(s.phase==='preflight') {
         const check=preflight(s)[s.preflightIndex||0];
-        if(status<200||status>=300||!check.validate(b))return pause(s,check.label+' could not be verified. Check account permissions, region, plan and Ubuntu 24.04 image.');
+        if(status<200||status>=300||!check.validate(b))return pause(s,check.label+' could not be verified'+(status<200||status>=300?' ('+providerError(status,b)+')':'')+'. Check account permissions, region, plan and Ubuntu 24.04 image.');
         s.verified=(s.verified||[]).concat(check.label);s.preflightIndex=(s.preflightIndex||0)+1;return render(s);
       }
       if(s.phase==='provision') {
         const op=graph(s)[s.index];
         if(s.httpStage==='keyLookup') {
-          if(status<200||status>=300)return pause(s,'Could not list public SSH keys in this account (HTTP '+status+').');
+          if(status<200||status>=300)return pause(s,'Could not list public SSH keys in this account ('+providerError(status,b)+').');
           const lookup=keyLookup(s),publicKey=x=>String(get(x,lookup[2],'')).trim().split(/\s+/).slice(0,2).join(' ');
           const keys=list(b,lookup[1]).filter(x=>publicKey(x)===s.publicKey);
           if(!keys.length&&incompleteList(s,b,event.result,list(b,lookup[1]),lookup[0]))
@@ -578,7 +596,7 @@
           return pause(s,'Cloud reconciliation returned an incomplete list. Check all pages in the cloud console; another resource cannot be created safely.');
         }
         if(recovered&&notFound(s,status,b))return absentCreation(s);
-        if(status<200||status>=300){if((status===404||status===429||status===503)&&s.httpStage==='read'&&s.attempt<60){s.attempt++;s.phase='wait';return render(s);}return pause(s,'Cloud '+op.key+' request failed (HTTP '+status+'). Review credentials, quota, image and region.');}
+        if(status<200||status>=300){if((status===404||status===429||status===503)&&s.httpStage==='read'&&s.attempt<60){s.attempt++;s.phase='wait';return render(s);}return pause(s,'Cloud '+op.key+' request failed ('+providerError(status,b)+'). Review credentials, quota, image and region.');}
         const value=recovered?recoveryBody(op,b):b;
         if(!value&&confirmedAbsent(op,b))return absentCreation(s);
         if(!value)return pause(s,'Interrupted creation could not be matched uniquely. Review cloud resources before retrying.');
@@ -590,8 +608,12 @@
         s.index++;s.httpStage='create';s.attempt=0;return render(s);
       }
       if(s.phase==='cleanup') {
-        if((status<200||status>=300)&&!notFound(s,status,b))return pause(s,'Resource deletion failed (HTTP '+status+'). Remaining resources are retained for retry.');
         const op=graph(s)[s.index];
+        if(busyDelete(s,op,status,b)){
+          if(s.attempt++>=60)return pause(s,'Cloud '+op.key+' stayed in use past the polling limit ('+providerError(status,b)+'). Remaining resources are retained for retry.');
+          s.httpStage='deleteRetry';s.phase='cleanupWait';return render(s);
+        }
+        if((status<200||status>=300)&&!notFound(s,status,b))return pause(s,'Cloud '+op.key+' deletion failed ('+providerError(status,b)+'). Remaining resources are retained for retry.');
         if(s.provider==='hetzner'&&op.key==='address'&&s.httpStage==='deleteCheck'&&!notFound(s,status,b)){
           const ip=get(b,'primary_ip'),server=s.resources.server;
           if(!ip||!Number.isSafeInteger(ip.id)||ip.id<=0||String(ip.id)!==String(s.resources.address.id)||
@@ -616,7 +638,7 @@
         return render(s);
       }
       if(s.phase==='cleanupExtra') {
-        if((status<200||status>=300)&&status!==404)return pause(s,'Additional cloud resource deletion failed; its receipt is retained.');
+        if((status<200||status>=300)&&status!==404)return pause(s,'Additional cloud resource deletion failed ('+providerError(status,b)+'); its receipt is retained.');
         if(status===404){const removed=s.extraCleanup.shift();if(s.resources['volume_'+removed.id])s.resources['volume_'+removed.id].status='deleted';s.httpStage='delete';s.attempt=0;return render(s);}
         if(s.attempt++>=60)return pause(s,'Additional cloud resource deletion did not finish');
         s.httpStage='deleteRead';s.phase='extraWait';return render(s);
