@@ -24,3 +24,5 @@ jobs:
         run: node tools/validate.mjs
       - name: Lint plugin UI JavaScript (syntax check)
         run: node tools/check-syntax.mjs
+      - name: VPN Setup pins one digest-pinned wg-easy image
+        run: node tools/check-image-pins.mjs

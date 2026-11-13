@@ -1,7 +1,7 @@
 # VPN Setup
 
 This standalone plugin creates a dedicated Ubuntu 24.04 cloud VM, installs
-wg-easy 15.4.0, and imports a WireGuard client directly into Mobile SSH. It can
+wg-easy 15.5.0, and imports a WireGuard client directly into Mobile SSH. It can
 also install onto a VM created using one of the console guides. The plugin list
 and the offline voice assistant use the same native, checkpointed workflow.
 
@@ -12,10 +12,10 @@ references and configuration references. Cloud credentials are never uploaded
 to the VM. The Python installer runs only through the protected native SSH path.
 
 The container is pinned to the multiarchitecture image index
-`ghcr.io/wg-easy/wg-easy:15.4.0@sha256:0e7bc9d34e86ddcaa92bc700d4d7dc9b33291dbc07ac8d13382f7c2095f949ec`
-(linux amd64 and arm64, resolved from GHCR on 2026-11-08). Automatic VM choices
-target amd64. Use Ubuntu 24.04 with at least 1 GB RAM and 20 GB storage for the
-console path; more RAM makes installation and upgrades less constrained.
+`ghcr.io/wg-easy/wg-easy:15.5.0@sha256:071f79a639e9361123a5e57733107320207b844ddbbd92dfa6962f541fe8aac8`
+(release v15.5.0 of 2026-10-24; never the legacy `latest` tag). Automatic VM
+choices target amd64. Use Ubuntu 24.04 with at least 1 GB RAM and 20 GB storage
+for the console path; more RAM makes installation and upgrades less constrained.
 
 ## Operation and recovery
 
@@ -32,12 +32,26 @@ console path; more RAM makes installation and upgrades less constrained.
 7. Connect using the VPN page. A successful import does not by itself establish
    an internet route; check the WireGuard handshake and test internet access.
 
-**Check server**, **Add client**, **Revoke client**, and **Delete deployment**
-operate on the saved deployment. Revoking the client's server key prevents
-future use of its configuration. Deletion of API-created servers uses the cloud
-API even when SSH is unavailable. Console-created VMs remain the user's cloud
-resources; the plugin removes its managed VPN installation, and the console
-guide explains how to remove the VM and public IP.
+**Check server**, **Add client**, **Revoke client**, **Update WireGuard**, and
+**Delete deployment** operate on the saved deployment. With Mobile SSH bridge
+1.4.0 or newer, **Check server** also shows the running wg-easy version and
+whether an update is available (older hosts drop that information), and
+**Update WireGuard** is offered unless the last check found the pinned release
+running. It asks for approval, downloads the pinned image before changing
+anything, keeps the server keys, clients and VPN profiles, and restarts
+WireGuard on the server. If this phone is connected through that server, its
+VPN is turned off first; reconnect it when the update finishes. If the new
+version does not start, or does not list the same clients, the installer
+restores its data copy and the previous version. A failed update says whether
+the image could not be downloaded (nothing changed), the previous version was
+restored, or the rollback also failed (the server's VPN is down); its recovery
+offers a check that changes nothing, a retry, or stopping. An update
+interrupted by a reboot resumes from the copy it took. Deployments created by
+VPN Setup 1.0.1 or earlier run 15.4.0 until updated. Revoking the client's
+server key prevents future use of its configuration. Deletion of API-created servers uses the cloud API even when SSH
+is unavailable. Console-created VMs remain the user's cloud resources; the
+plugin removes its managed VPN installation, and the console guide explains how
+to remove the VM and public IP.
 
 The page lists each deployment once, with its recent operations underneath.
 It acts on the deployment's unfinished operation first and offers no new one
@@ -75,12 +89,19 @@ Native account forms support persistent per-account credentials.
 ## Validation
 
 Run `node --test plugins/vpnsetup/tests/*.test.cjs` and
-`python3 -m unittest discover -s plugins/vpnsetup/tests -p 'test_*.py'`.
+`python3 -B -m unittest discover -s plugins/vpnsetup/tests -p 'test_*.py'`
+(`-B` keeps `__pycache__` out of the catalogued plugin files).
+`node tools/check-image-pins.mjs` (run by CI) requires `worker.js`,
+`server/vpn.py` and this README to name the same digest-pinned image, and
+`ui/app.js` its release. `.github/workflows/upstream.yml` fails weekly, and
+warns on each push and pull request to main, when wg-easy publishes a newer
+release than the pin. GitHub disables a scheduled workflow after 60 days
+without repository activity; re-enable it from the Actions tab.
 The tests use fixture HTTP results and mock installer dependencies. No cloud
 account, paid VM, live key or VPN connection is used. Real-cloud end-to-end and
 Android device verification are separate release checks.
 
 API references: [wg-easy unattended setup](https://wg-easy.github.io/wg-easy/latest/advanced/config/unattended-setup/),
-[wg-easy pinned API source](https://github.com/wg-easy/wg-easy/tree/v15.4.0/src/server/api).
+[wg-easy pinned API source](https://github.com/wg-easy/wg-easy/tree/v15.5.0/src/server/api).
 wg-easy is distributed by its authors under AGPL-3.0-only; this plugin downloads
 the upstream container and does not embed its code.

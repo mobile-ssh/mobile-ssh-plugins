@@ -1,7 +1,15 @@
 /* Pure, checkpointable workflow. No fetch, DOM, clock, random or credential bytes. */
 (function (root) {
   'use strict';
-  const IMAGE = 'ghcr.io/wg-easy/wg-easy:15.4.0@sha256:0e7bc9d34e86ddcaa92bc700d4d7dc9b33291dbc07ac8d13382f7c2095f949ec';
+  const IMAGE = 'ghcr.io/wg-easy/wg-easy:15.5.0@sha256:071f79a639e9361123a5e57733107320207b844ddbbd92dfa6962f541fe8aac8';
+  const RELEASE = IMAGE.split(':')[1].split('@')[0];
+  // Bridge 1.4.0 passes the installer's fixed update outcomes as these native codes; anything else is a plain interruption.
+  const RECONNECT = ' If this phone\'s VPN was turned off for the update, reconnect it.';
+  const UPDATE_FAILURES = {
+    UPDATE_NOT_DOWNLOADED: 'The server could not download WireGuard '+RELEASE+'. WireGuard on the server was not changed.'+RECONNECT,
+    UPDATE_ROLLED_BACK: 'WireGuard '+RELEASE+' did not start correctly, so the server went back to the previous version with its clients.'+RECONNECT,
+    UPDATE_RESTORE_FAILED: 'WireGuard '+RELEASE+' did not start correctly and the previous version did not restart either: the VPN on this server is down. Retry the update, or check the server, which keeps the data from before the update.'
+  };
   const PROVIDERS = {
     gcp: ['Google Cloud', 'https://cloud.google.com/compute/pricing', 'ubuntu'],
     aws: ['AWS Lightsail', 'https://aws.amazon.com/lightsail/pricing/', 'ubuntu'],
@@ -438,6 +446,14 @@
       host:s.host,port:22,user:s.user,credentialRef:s.sshCredentialRef,
       args:{image:IMAGE,endpoint:s.host,udpPort:51820,clientKey:s.deploymentId+'-'+(s.clientSequence||0),clientId:s.targetClientId}});
   }
+  // Native receipts carry only a plain x.y.z version and booleans; anything else is left out.
+  // An update reports no clients, so the last check's list stays. target is the release this bundle installs.
+  function health(s,b) {
+    const value={healthy:b.healthy===true,clients:Array.isArray(b.clients)?b.clients:s.phase==='update'?list(s,'health.clients'):[],target:RELEASE};
+    if(typeof b.version==='string'&&/^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$/.test(b.version))value.version=b.version;
+    for(const key of ['current','updated'])if(typeof b[key]==='boolean')value[key]=b[key];
+    return value;
+  }
   function render(s) {
     if(s.phase==='provider')return input(s,'provider','Where should your VPN run?',[
       field('provider','Cloud provider','digitalocean',{type:'select',options:Object.keys(PROVIDERS).map(value=>({value,label:PROVIDERS[value][0]}))})]);
@@ -460,6 +476,9 @@
       if(!check){s.phase='confirm';return render(s);}
       return output(s,{kind:'http',id:s.deploymentId+'-preflight-'+(s.preflightIndex||0),...check.request});
     }
+    // An update job only updates or checks its server: the native host refuses any other step in it.
+    if(s.phase==='recovery'&&s.operation==='update')return input(s,'recovery','Update needs attention',[field('action','Next step','health',{type:'select',options:[
+      {value:'health',label:'Check server (changes nothing)'},{value:'retry',label:'Retry the update'},{value:'keep',label:'Stop here'}]})],{error:s.error});
     if(s.phase==='recovery')return input(s,'recovery','Setup needs attention',[field('action','Next step','reconcile',{type:'select',options:[
       {value:'reconcile',label:'Check current cloud state'},{value:'retry',label:'Retry reconciliation'},
       ...(s.creationAbsent?[{value:'recreate',label:'Review a new creation attempt'}]:[]),
@@ -473,6 +492,8 @@
         :'The VPN, clients and owned cloud resources will be removed. This cannot be undone.'}});
     if(s.phase==='clientConfirm')return input(s,'confirm',s.operation==='createClient'?'Register a new VPN client?':'Revoke this VPN client?',[],{
       destructive:s.operation==='revokeClient',summary:{deploymentId:s.deploymentId,host:s.host,clientId:s.targetClientId,operation:s.operation}});
+    if(s.phase==='updateConfirm')return input(s,'confirm','Update WireGuard to '+RELEASE+'?',[],{summary:{deploymentId:s.deploymentId,host:s.host,operation:'update',version:RELEASE,
+      warning:'Installs wg-easy '+RELEASE+' and restarts WireGuard on the server. Existing clients and VPN profiles stay. If this phone is connected through this server, its VPN is turned off first: reconnect when the update finishes. If the new version does not start, the previous one is restored.'}});
     if(s.phase==='provision') {
       const op=graph(s)[s.index];
       if(!op){s.host=s.host||get(s.resources,'address.host')||get(s.resources,'server.host');if(!s.host)return pause(s,'Cloud did not return a public IPv4 address');s.phase='bootstrap';return render(s);}
@@ -481,7 +502,7 @@
       return http(s,s.httpStage==='read'?op.read:op.create,s.httpStage==='read'?'read':'create');
     }
     if(s.phase==='wait'||s.phase==='cleanupWait'||s.phase==='extraWait')return output(s,{kind:'delay',id:s.deploymentId+'-'+s.phase+'-'+s.index+'-'+s.attempt,milliseconds:Math.min(30000,2000*Math.pow(2,Math.min(4,s.attempt))),delayMs:Math.min(30000,2000*Math.pow(2,Math.min(4,s.attempt)))});
-    if(['bootstrap','health','createClient','revokeClient'].includes(s.phase))return ssh(s,s.phase);
+    if(['bootstrap','health','createClient','revokeClient','update'].includes(s.phase))return ssh(s,s.phase);
     if(s.phase==='import')return output(s,{kind:'vpn.import',id:s.deploymentId+'-import-'+s.clientSequence,configRef:s.configRef,name:'VPN '+s.name,
       deploymentId:s.deploymentId,clientId:s.lastClientId});
     if(s.phase==='deleteServer')return ssh(s,'delete');
@@ -515,13 +536,17 @@
       if(operation==='setup')s.phase='provider';
       else if(operation==='delete')s.phase='deleteConfirm';
       else if(!s.host||!s.sshCredentialRef)throw new Error('Lifecycle operations require an owned deployment snapshot');
-      else if(['health','createClient','revokeClient'].includes(operation)){s.phase=operation==='health'?'health':'clientConfirm';if(operation==='createClient')s.clientSequence++;}
+      else if(['health','createClient','revokeClient','update'].includes(operation)){s.phase=operation==='health'?'health':operation==='update'?'updateConfirm':'clientConfirm';if(operation==='createClient')s.clientSequence++;}
       else throw new Error('Unknown workflow operation');
       return render(s);
     }
     if(event.requestId&&event.requestId!==s.pending)throw new Error('Stale workflow response');
     if(event.type==='cancel'){s.suspendedPhase=s.phase;s.phase='cancelled';return output(s);}
-    if(event.type==='error')return pause(s,'The operation was interrupted. Check current state before retrying.');
+    if(event.type==='error'){
+      const failure=s.phase==='update'&&UPDATE_FAILURES[event.code];
+      if(event.code==='UPDATE_RESTORE_FAILED'&&failure)delete s.health; // Its version line would describe a VPN that is down.
+      return pause(s,failure||'The operation was interrupted. Check current state before retrying.');
+    }
     if(event.type==='resume'){if(s.phase==='cancelled'&&s.suspendedPhase)s.phase=s.suspendedPhase;return render(s);}
     try {
       if(event.type==='input') {
@@ -547,12 +572,14 @@
           s.index=ownsCloud?graph(s).length-1:-1;s.httpStage='delete';s.attempt=0;
         }
         else if(s.phase==='clientConfirm'){if(v.confirmed!==true&&v.approved!==true){s.phase='cancelled';return output(s);}s.phase=s.operation;}
+        else if(s.phase==='updateConfirm'){if(v.confirmed!==true&&v.approved!==true){s.phase='cancelled';return output(s);}s.phase='update';}
         else if(s.phase==='recreateConfirm'){
           if(v.confirmed!==true&&v.approved!==true){s.phase='recovery';return render(s);}
           s.allowRecreate=true;s.phase='provision';s.httpStage='reconcile';return render(s);
         }
         else if(s.phase==='recovery'){
           if(v.action==='keep'){s.phase='cancelled';return output(s);}
+          if(s.operation==='update'){s.phase=v.action==='retry'?'update':'health';return render(s);}
           if(v.action==='cleanup'){s.phase='deleteConfirm';return render(s);}
           if(v.action==='recreate'){if(!s.creationAbsent)throw new Error('Reconcile the missing resource first');s.phase='recreateConfirm';return render(s);}
           if(v.action==='edit'){
@@ -650,7 +677,8 @@
         s.configRef=b.configRef;s.lastClientId=String(b.clientId);s.phase='import';return render(s);
       }
       if(s.phase==='import'){s.profileId=b.profileId;s.clients=(s.clients||[]).filter(x=>x.clientId!==s.lastClientId);s.clients.push({clientId:s.lastClientId,profileId:b.profileId});delete s.configRef;s.phase='ready';return output(s);}
-      if(s.phase==='health'){s.health={healthy:b.healthy===true,clients:b.clients||[]};s.phase='ready';return output(s);}
+      // A check that ends an update job without the pinned version running ends it as stopped, not done.
+      if(s.phase==='health'||s.phase==='update'){s.health=health(s,b);s.phase=s.operation==='update'&&b.current!==true?'cancelled':'ready';return output(s);}
       if(s.phase==='revokeClient'){
         s.clients=(s.clients||[]).filter(x=>x.clientId!==s.targetClientId);
         const selected=s.clients.find(x=>x.profileId===s.profileId)||s.clients[s.clients.length-1];
@@ -661,6 +689,6 @@
       return render(s);
     } catch(error) {s.interruptedPhase=s.phase;return pause(s,error.message);}
   }
-  root.MobileSSHWorkflow={next,providers:PROVIDERS,graph,credentialFields:CREDENTIALS,optionFields:OPTIONS};
+  root.MobileSSHWorkflow={next,providers:PROVIDERS,graph,credentialFields:CREDENTIALS,optionFields:OPTIONS,image:IMAGE,release:RELEASE};
   if(typeof module!=='undefined'&&module.exports)module.exports=root.MobileSSHWorkflow;
 })(typeof globalThis!=='undefined'?globalThis:this);

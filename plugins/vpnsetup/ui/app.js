@@ -1,11 +1,13 @@
 (function () {
   'use strict';
   const $ = id => document.getElementById(id);
-  const OPERATIONS = {setup:'Setup',health:'Check server',createClient:'Add client',revokeClient:'Revoke client',delete:'Delete'};
+  // The wg-easy release this bundle installs; tools/check-image-pins.mjs keeps it equal to worker.js's pin.
+  const RELEASE = '15.5.0';
+  const OPERATIONS = {setup:'Setup',health:'Check server',createClient:'Add client',revokeClient:'Revoke client',update:'Update WireGuard',delete:'Delete'};
   const STATUS = {READY:'Starting',RUNNING:'In progress',WAITING_INPUT:'Waiting for you',PAUSED:'Paused',SUCCEEDED:'Done',FAILED:'Failed',CANCELLED:'Stopped'};
   // Each control reports its errors in the slot beside it, where the tap happened.
   const SLOTS = {new:'new-error',review:'job-error',resume:'job-error',cancel:'job-error',connect:'manage-error',health:'manage-error',
-    client:'manage-error',revoke:'client-error',export:'client-error',admin:'client-error',delete:'delete-error',forget:'forget-error'};
+    client:'manage-error',update:'manage-error',revoke:'client-error',export:'client-error',admin:'client-error',delete:'delete-error',forget:'forget-error'};
   const CHANGED = 'The workflow changed in the meantime. Check its current state and try again.';
   const ERRORS = {'A deployment operation is already pending':'Another operation on this VPN has not finished. Continue or resume it first.',
     'Workflow changed':CHANGED,'Workflow cannot resume':CHANGED,NO_PENDING_INPUT:'This step no longer needs an answer.',
@@ -35,6 +37,22 @@
     return STATUS[st] || st.replace(/_/g, ' ').toLowerCase() || 'Unknown';
   }
   const named = job => OPERATIONS[operation(job)] || operation(job);
+  // Semver at least: bridge 1.4.0 runs the update operation; older hosts refuse it, so it is not offered there.
+  function atLeast(version, wanted) {
+    const parse = value => { const part = /^(\d+)\.(\d+)\.(\d+)(-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.exec(String(value || '')); return part && [+part[1], +part[2], +part[3], !part[4]]; };
+    const have = parse(version), need = parse(wanted);
+    if (!have) return false;
+    for (let at = 0; at < 3; at++) if (have[at] !== need[at]) return have[at] > need[at];
+    return have[3] || !need[3]; // A prerelease comes before its release.
+  }
+  // The last check's result: health and update receipts carry the running wg-easy version and whether it ran the pin of the
+  // bundle that checked (its target). It is up to date only if that pin is this bundle's: a newer bundle has a newer release.
+  const latest = health => !!health && health.current === true && health.target === RELEASE;
+  function wireguard(health) {
+    const value = health || {}, plain = item => typeof item === 'string' && /^\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(item) ? item : '';
+    if (typeof value.current !== 'boolean') return '';
+    return 'WireGuard ' + (plain(value.version) || 'version unknown') + ' · ' + (latest(value) ? 'up to date' : 'update to ' + RELEASE + ' available');
+  }
   // One line per deployment: what it is now, not every job that ever ran for it.
   function summary(deployment) {
     const job = deployment.current, state = job.state || {}, st = status(job);
@@ -102,6 +120,9 @@
     // The journal refuses another operation until this one finishes, so do not offer one.
     show('blocked', blocked ? named(job) + ' has not finished. Continue or resume it before starting another operation on this VPN.' : '');
     ['health','client','revoke','delete'].forEach(id => { $(id).hidden = blocked; });
+    // Not offered while the last check found this release running: an update would only stop this phone's VPN for nothing.
+    $('update').hidden = blocked || !atLeast(window.MobileSSH.version, '1.4.0') || latest(state.health);
+    show('wireguard', wireguard(state.health));
     const clients = (state.clients || []).map(client => [String(client.clientId), 'Client ' + client.clientId]), picked = $('clients').value;
     options('clients', clients, clients.some(([value]) => value === picked) ? picked : clients.length ? clients[0][0] : '');
     $('revoke').disabled = !clients.length; $('export').disabled = !clients.length; $('forget').hidden = !state.credentialRef;
@@ -159,6 +180,7 @@
   $('resume').onclick = () => action('resume', () => MobileSSH.workflows.resume({id: current().id, revision: current().revision}));
   $('cancel').onclick = () => action('cancel', () => MobileSSH.workflows.cancel({id: current().id, revision: current().revision}));
   $('health').onclick = () => action('health', () => manage('health')); $('client').onclick = () => action('client', () => manage('createClient'));
+  $('update').onclick = () => action('update', () => manage('update'));
   $('connect').onclick = () => action('connect', () => MobileSSH.workflows.openVpn({id: current().id}));
   $('export').onclick = () => action('export', () => MobileSSH.workflows.export({id: current().id, clientId: $('clients').value}));
   $('admin').onclick = () => action('admin', () => MobileSSH.workflows.openAdmin({id: current().id}));

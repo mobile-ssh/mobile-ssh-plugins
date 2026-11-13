@@ -45,6 +45,7 @@ function harness(initial, options = {}) {
     return fallback(args);
   };
   const MobileSSH = {
+    version: options.version,
     ui: { theme: async () => (options.theme ? options.theme() : {}) },
     workflows: {
       list: async () => { calls.push(['list']); return plain(jobs); },
@@ -276,6 +277,55 @@ test('every wait note goes once the action it waited for ends', async () => {
   assert.deepEqual(h.calls.filter(call => call[0] === 'create').map(call => call[1].operation), ['health']);
   for (let poll = 0; poll < 3; poll++) await h.poll();
   for (const slot of slots) assert.equal(h.get(slot).textContent, '', slot + ' stays clear');
+});
+
+const checked = health => [job('health-1', 'health', 'SUCCEEDED', 20, { state: { health } }), job('setup-alpha', 'setup', 'SUCCEEDED', 10)];
+
+test('Update WireGuard is offered only from bridge 1.4.0 and only while no operation is pending', async () => {
+  for (const [version, offered] of [[undefined, false], ['1.3.0', false], ['1.3.9', false], ['1.4.0-beta.1', false], ['1.4', false], ['next', false],
+    ['1.4.0', true], ['1.4.0+build.7', true], ['1.4.2', true], ['1.10.0', true], ['2.0.0', true]]) {
+    const h = harness(checked({ healthy: true, clients: [] }), { version }); await flush();
+    assert.equal(h.get('manage').hidden, false);
+    assert.equal(h.get('update').hidden, !offered, 'bridge ' + version);
+    assert.equal(h.get('health').hidden, false, 'other operations stay offered');
+  }
+  const busy = harness(fleet(), { version: '1.4.0' }); await flush();
+  assert.equal(busy.get('update').hidden, true, 'a pending operation blocks the update too');
+  assert.equal(busy.get('health').hidden, true);
+  const h = harness(checked({ healthy: true, clients: [] }), { version: '1.4.0' }); await flush();
+  await h.get('update').click();
+  assert.deepEqual(plain(h.calls.filter(call => call[0] === 'create').map(call => call[1])), [{ operation: 'update', inputs: { deploymentId: 'alpha' } }]);
+  assert.match(h.get('history').children[0].textContent, /^Update WireGuard · Starting/);
+  const refused = harness(checked({}), { version: '1.4.0', create: async () => { throw new Error('A deployment operation is already pending'); } });
+  await flush(); await refused.get('update').click();
+  assert.match(refused.get('manage-error').textContent, /Another operation on this VPN has not finished/);
+});
+
+test('a check shows the running WireGuard version and whether an update is available', async () => {
+  for (const [health, shown] of [
+    [{ healthy: true, clients: [], target: '15.5.0', version: '15.4.0', current: false }, 'WireGuard 15.4.0 · update to 15.5.0 available'],
+    [{ healthy: true, clients: [], target: '15.5.0', version: '15.5.0', current: true, updated: true }, 'WireGuard 15.5.0 · up to date'],
+    // "current" was measured against the pin of the bundle that checked: an older bundle's pin is not this release.
+    [{ healthy: true, clients: [], target: '15.4.0', version: '15.4.0', current: true }, 'WireGuard 15.4.0 · update to 15.5.0 available'],
+    [{ healthy: true, current: true }, 'WireGuard version unknown · update to 15.5.0 available'],
+    [{ healthy: true, current: false }, 'WireGuard version unknown · update to 15.5.0 available'],
+    [{ healthy: true, current: false, version: '<b>15</b>', target: 'x' }, 'WireGuard version unknown · update to 15.5.0 available'],
+    [{ healthy: true, clients: [] }, ''], [undefined, '']]) {
+    const h = harness(checked(health), { version: '1.3.0' }); await flush();
+    assert.equal(h.get('wireguard').textContent, shown);
+    assert.equal(h.get('wireguard').hidden, !shown);
+  }
+});
+
+test('Update WireGuard is not offered while the last check found this release running', async () => {
+  for (const [health, offered] of [
+    [{ healthy: true, clients: [], target: '15.5.0', version: '15.5.0', current: true }, false],
+    [{ healthy: true, clients: [], target: '15.4.0', version: '15.4.0', current: true }, true],
+    [{ healthy: true, clients: [], target: '15.5.0', version: '15.4.0', current: false }, true],
+    [{ healthy: true, clients: [] }, true], [undefined, true]]) {
+    const h = harness(checked(health), { version: '1.4.0' }); await flush();
+    assert.equal(h.get('update').hidden, !offered, JSON.stringify(health));
+  }
 });
 
 // The custom properties styles.css gives :root, by the colour scheme the WebView reports and the page's data-theme.

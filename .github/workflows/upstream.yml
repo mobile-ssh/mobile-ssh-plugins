@@ -1,0 +1,46 @@
+name: Upstream wg-easy
+
+# Weekly, plus a warning on every push and pull request to main: a new upstream release must
+# not fail unrelated changes, but should be seen. GitHub disables scheduled workflows in a
+# public repository after 60 days without activity; re-enable this one from the Actions tab.
+on:
+  schedule:
+    - cron: '23 6 * * 1'
+  workflow_dispatch:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  wg-easy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Fail when wg-easy has a newer release than VPN Setup pins
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # Scheduled and manual runs fail; push and pull request runs only warn.
+          LEVEL: ${{ (github.event_name == 'push' || github.event_name == 'pull_request') && 'warning' || 'error' }}
+        run: |
+          pinned="$(node tools/check-image-pins.mjs --version)"
+          # Highest x.y.z among published non-prerelease releases. Not /releases/latest:
+          # that sorts by creation date, and v14.0.0 was created after v15.0.0.
+          newest="$(gh api 'repos/wg-easy/wg-easy/releases?per_page=100' --jq '
+            [.[] | select((.draft or .prerelease) | not) | .tag_name
+              | select(test("^v?[0-9]+\\.[0-9]+\\.[0-9]+$")) | ltrimstr("v")]
+            | max_by(split(".") | map(tonumber)) // empty' || true)"
+          fail() { echo "::$LEVEL title=$1::$2"; [ "$LEVEL" = warning ] || exit 1; exit 0; }
+          if [ -z "$newest" ]; then
+            fail "wg-easy releases" "Could not read wg-easy releases from GitHub"
+          fi
+          if [ "$(printf '%s\n%s\n' "$pinned" "$newest" | sort -V | tail -n 1)" != "$pinned" ]; then
+            fail "wg-easy $newest available" "VPN Setup pins wg-easy $pinned but $newest is released. Pin the new multi-arch index by digest (never the 'latest' tag) in plugins/vpnsetup/worker.js, server/vpn.py and the README, set RELEASE in ui/app.js, then bump the plugin version."
+          fi
+          echo "VPN Setup pins wg-easy $pinned; newest release is $newest."

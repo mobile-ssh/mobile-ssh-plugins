@@ -17,7 +17,7 @@ function mock() {
 test('bounded exec sends byte limit and preserves NUL output', async () => {
   const m = mock();
   const result = m.window.MobileSSH.ssh.exec('git status', { maxOutputBytes: 2097152, timeoutMs: 500 });
-  assert.equal(m.window.MobileSSH.version, '1.3.0');
+  assert.equal(m.window.MobileSSH.version, '1.4.0');
   assert.deepEqual(m.request(), { method: 'ssh.exec', args: {
     command: 'git status', timeoutMs: 500, maxOutputBytes: 2097152
   } });

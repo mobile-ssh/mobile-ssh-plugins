@@ -279,6 +279,127 @@ test('client mutations require a fresh confirmation but health does not',()=>{
   assert.equal(worker.next({deploymentId:prior.deploymentId,operation:'health',inputs:{deployment:prior}},{type:'start'}).step.operation,'health');
 });
 
+test('every new install and update uses the same digest-pinned wg-easy release',()=>{
+  assert.match(worker.image,/^ghcr\.io\/wg-easy\/wg-easy:15\.5\.0@sha256:[a-f0-9]{64}$/);
+  assert.equal(worker.release,'15.5.0');
+  const installer=fs.readFileSync(path.join(__dirname,'..','server','vpn.py'),'utf8');
+  assert.ok(installer.includes('IMAGE = "'+worker.image+'"'),'worker and installer pin one image');
+});
+
+function lifecycle(operation,prior,extra){
+  return plain(worker.next({deploymentId:prior.deploymentId,operation,inputs:{deployment:prior,...extra}},{type:'start'}));
+}
+function deployed(){
+  const prior=state('hetzner');prior.phase='ready';prior.host='203.0.113.7';prior.clientSequence=3;
+  prior.clients=[{clientId:'1',profileId:'first-profile'}];prior.profileId='first-profile';prior.lastClientId='1';
+  prior.health={healthy:true,clients:[{id:'1',enabled:true}],target:'15.5.0',version:'15.4.0',current:false};
+  return prior;
+}
+
+test('update asks for a native confirmation naming the release, then runs the pinned installer update',()=>{
+  const prior=deployed();
+  let current=lifecycle('update',prior);
+  assert.equal(current.step.kind,'input');assert.equal(current.step.form,'confirm');
+  assert.equal(current.step.title,'Update WireGuard to 15.5.0?');
+  assert.equal(current.step.destructive,undefined);
+  assert.equal(current.step.summary.version,'15.5.0');assert.equal(current.step.summary.operation,'update');
+  assert.match(current.step.summary.warning,/clients and VPN profiles stay/);
+  // The host stops this phone's tunnel to the server first and never restarts it: the text must not promise a short drop.
+  assert.match(current.step.summary.warning,/its VPN is turned off first: reconnect when the update finishes/);
+  assert.doesNotMatch(current.step.summary.warning,/few seconds/);
+  current=plain(worker.next(current.state,{type:'input',value:{approved:true}}));
+  assert.equal(current.step.kind,'ssh');assert.equal(current.step.operation,'update');
+  assert.equal(current.step.id,prior.deploymentId+'-update-3');
+  assert.equal(current.step.args.image,worker.image);assert.equal(current.step.host,'203.0.113.7');
+  assert.equal(current.step.credentialRef,'ssh-ref');
+  current=result(current,{healthy:true,updated:true,version:'15.5.0',current:true});
+  assert.equal(current.step.kind,'complete');assert.equal(current.state.phase,'ready');
+  assert.deepEqual(current.state.health,{healthy:true,clients:[{id:'1',enabled:true}],target:'15.5.0',version:'15.5.0',current:true,updated:true});
+  // Clients, profiles and the client numbering are untouched.
+  assert.deepEqual(current.state.clients,prior.clients);assert.equal(current.state.profileId,'first-profile');
+  assert.equal(current.state.clientSequence,3);
+  // A later update of the same deployment is a new job with the same stable step id.
+  const again=plain(worker.next(lifecycle('update',current.state).state,{type:'input',value:{approved:true}}));
+  assert.equal(again.step.id,prior.deploymentId+'-update-3');
+});
+
+test('declining the update changes nothing on the server',()=>{
+  for(const value of [{approved:false},{},{confirmed:'yes'}]){
+    const current=plain(worker.next(lifecycle('update',deployed()).state,{type:'input',value}));
+    assert.equal(current.step.kind,'complete');assert.equal(current.state.phase,'cancelled');
+    assert.equal(current.state.health.version,'15.4.0');
+  }
+});
+
+function failedUpdate(code){
+  const started=plain(worker.next(lifecycle('update',deployed()).state,{type:'input',value:{approved:true}}));
+  return {id:started.step.id,current:plain(worker.next(started.state,{type:'error',stepId:started.step.id,code}))};
+}
+test('an interrupted update pauses for review and retries the same idempotent installer step only when asked',()=>{
+  let {id,current}=failedUpdate('operation_interrupted');
+  assert.equal(current.step.form,'recovery');assert.equal(current.state.interruptedPhase,'update');
+  assert.equal(current.state.error.message,'The operation was interrupted. Check current state before retrying.');
+  // Only a read-only check, an explicit retry or stopping: no cloud reconciliation, cleanup or recreation inside an update job.
+  assert.deepEqual(current.step.fields.map(f=>[f.key,f.default,f.options.map(o=>o.value)]),[['action','health',['health','retry','keep']]]);
+  current=plain(worker.next(current.state,{type:'input',value:{action:'retry'}}));
+  assert.equal(current.step.kind,'ssh');assert.equal(current.step.operation,'update');assert.equal(current.step.id,id);
+  current=result(current,{healthy:true,updated:false,version:'15.5.0',current:true});
+  assert.equal(current.state.phase,'ready');assert.equal(current.state.health.updated,false);
+});
+
+test('checking the server after a failed update runs the read-only health step, never the update again',()=>{
+  for(const action of ['health','reconcile','cleanup','edit']){
+    let {current}=failedUpdate('UPDATE_ROLLED_BACK');
+    current=plain(worker.next(current.state,{type:'input',value:{action}}));
+    assert.equal(current.step.kind,'ssh',action);assert.equal(current.step.operation,'health',action);
+    assert.equal(current.step.args.image,worker.image);
+    const rolledBack=result(current,{healthy:true,clients:[{id:'1',enabled:true}],version:'15.4.0',current:false});
+    assert.equal(rolledBack.step.kind,'complete');assert.equal(rolledBack.state.phase,'cancelled','the update did not happen: stopped, not done');
+    assert.deepEqual(rolledBack.state.health,{healthy:true,clients:[{id:'1',enabled:true}],target:'15.5.0',version:'15.4.0',current:false});
+    // The result of an update whose answer was lost on the way back: the check finds the pin running.
+    assert.equal(result(current,{healthy:true,clients:[],version:'15.5.0',current:true}).state.phase,'ready');
+  }
+  const {current}=failedUpdate('UPDATE_ROLLED_BACK');
+  assert.equal(plain(worker.next(current.state,{type:'input',value:{action:'keep'}})).state.phase,'cancelled');
+});
+
+test('each fixed update outcome says what state the server is in',()=>{
+  for(const [code,text,health] of [
+    ['UPDATE_NOT_DOWNLOADED',/could not download WireGuard 15\.5\.0\. WireGuard on the server was not changed\. If this phone's VPN was turned off/,true],
+    ['UPDATE_ROLLED_BACK',/did not start correctly, so the server went back to the previous version with its clients\. If this phone's VPN/,true],
+    ['UPDATE_RESTORE_FAILED',/previous version did not restart either: the VPN on this server is down\. Retry the update/,false]]){
+    const {current}=failedUpdate(code);
+    assert.equal(current.step.form,'recovery',code);assert.match(current.state.error.message,text);
+    assert.equal(current.step.error.message,current.state.error.message);
+    assert.equal('health' in current.state,health,code+': a version line for a server that is down would be stale');
+  }
+  // The codes only describe an update step; elsewhere they are a plain interruption.
+  const prior=deployed();const checking=lifecycle('health',prior);
+  const other=plain(worker.next(checking.state,{type:'error',stepId:checking.step.id,code:'UPDATE_ROLLED_BACK'}));
+  assert.equal(other.state.error.message,'The operation was interrupted. Check current state before retrying.');
+  assert.equal(failedUpdate('INSTALLER_FAILED').current.state.error.message,'The operation was interrupted. Check current state before retrying.');
+});
+
+test('health keeps the running version and pin status, dropping anything malformed',()=>{
+  const prior=deployed();delete prior.health;
+  let current=lifecycle('health',prior);
+  assert.equal(current.step.operation,'health');assert.equal(current.step.id,prior.deploymentId+'-health-3');
+  const checked=result(current,{healthy:true,clients:[{id:'1',enabled:true}],version:'15.4.0',current:false});
+  assert.deepEqual(checked.state.health,{healthy:true,clients:[{id:'1',enabled:true}],target:'15.5.0',version:'15.4.0',current:false});
+  for(const [version,currentFlag] of [['15.4.0-beta.1','false'],[' 15.4.0',1],['1234.5.6',null],[15,undefined]]){
+    const odd=result(lifecycle('health',prior),{healthy:true,version,current:currentFlag,updated:'yes'});
+    assert.deepEqual(odd.state.health,{healthy:true,clients:[],target:'15.5.0'});
+  }
+  // A host older than bridge 1.4.0 reports neither field; the result stays as before.
+  const legacy=result(lifecycle('health',prior),{healthy:true,clients:[]});
+  assert.deepEqual(Object.keys(legacy.state.health).sort(),['clients','healthy','target']);
+});
+
+test('update is a known lifecycle operation that still needs an owned deployment',()=>{
+  assert.throws(()=>worker.next({deploymentId:'no-snapshot',operation:'update',inputs:{}},{type:'start'}),/owned deployment snapshot/);
+  assert.throws(()=>worker.next({deploymentId:'x',operation:'upgrade',inputs:{deployment:deployed()}},{type:'start'}),/Unknown workflow operation/);
+});
+
 test('revocation keeps Open VPN pointed at a surviving profile and clears the last removed profile',()=>{
   function revoke(prior,clientId){
     let current=plain(worker.next({deploymentId:prior.deploymentId,operation:'revokeClient',inputs:{deployment:prior,clientId}},{type:'start'}));

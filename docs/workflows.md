@@ -48,6 +48,29 @@ Use `MobileSSH.workflows.create/list/get/answer/resume/cancel/review` and
 review without returning config text; `openAdmin` opens a native SSH loopback
 tunnel and a service WebView without a plugin bridge. `forgetCredential` removes
 the selected account secret. Type signatures are in `sdk/mobilessh.d.ts`.
+Lifecycle operations on a finished deployment are `health`, `createClient`,
+`revokeClient`, `delete` and, from bridge 1.4.0, `update`; check
+`MobileSSH.version` (compare its parts as numbers) before offering `update`,
+since older hosts refuse it. An `update` job runs only `ssh` steps with
+operation `update` or `health`; the host fails any other step in it, so
+cleanup or deletion needs its own `delete` job and approval. A failed `update`
+step reaches the worker as an `error` event whose `code` is
+`UPDATE_NOT_DOWNLOADED` (nothing changed), `UPDATE_ROLLED_BACK` (the previous
+version runs again) or `UPDATE_RESTORE_FAILED` (the rollback failed too, so the
+server's VPN is down); every other failure stays `operation_interrupted`.
+
+VPN Setup's `update` asks for native approval, then runs the pinned installer's
+`update`: it downloads the pinned wg-easy image before changing anything, notes
+the clients' ids and public keys, stops the container, copies its data
+directory (wg-easy migrates its database on start), starts the new version and
+verifies its API, `wg0` and the same clients. If the new version does not pass,
+it restores the copy and the previous version. A copy left by an interrupted
+update or rollback is used by the next update. Both its result and `health`'s
+include `version` (the running wg-easy x.y.z, when known) and `current`
+(whether it runs the pinned image); `update` also reports `updated`. Clients,
+keys and imported VPN profiles are kept. A phone connected through the server
+has its tunnel to it stopped before the session opens and reconnects by hand.
+Its recovery offers a read-only check, an explicit retry, or stopping.
 
 The VPN Setup bundle implements ten provider adapters plus an existing-server
 path. Its fixtures validate transitions, recovery, deletion and installer
@@ -67,3 +90,28 @@ provider reads confirmed the VM, Primary IPv4, firewall and SSH key all returned
 404 and no resources remained under the deployment label. The test resources
 were removed. Other cloud adapters and physical-phone acceptance still require
 their own live runs; this IPv4-only server does not provide IPv6 internet egress.
+
+VPN Setup 1.0.2 pins wg-easy 15.5.0
+(`ghcr.io/wg-easy/wg-easy:15.5.0@sha256:071f79a639e9361123a5e57733107320207b844ddbbd92dfa6962f541fe8aac8`).
+The live acceptance above used 15.4.0; 15.5.0 and the `update` operation have
+not had a live cloud run. On 2026-11-12 a local harness called the installer's
+operations as root against the real 15.4.0 and 15.5.0 images, with only
+systemd, module loading, apt and the public-address check stubbed: on local
+Docker (Engine 29.6.2, Compose 5.3.1, Python 3.12.16), and in an isolated
+Ubuntu 24.04.4 container with its packaged `docker.io` 29.1.3,
+`docker-compose-v2` 2.40.3 and Python 3.12.3, which is what setup installs.
+Every check passed in both. VPN Setup 1.0.1's installer set up 15.4.0 with two
+clients and 1.0.2's updated it to 15.5.0: both clients kept their ids and
+names, the first one's configuration was identical in every field, keys
+included, and wg-easy no longer reported an update. That client and one added
+after the update completed a WireGuard handshake and pinged the server through
+15.5.0 from a container on the deployment's Docker network. Revoking the second
+client then left exactly the two enabled peers on `wg0`. A second update left
+the running container untouched. Another image, and a pin that could not be
+downloaded, were refused without changing anything. When the harness failed
+15.5.0's verification after it had migrated the database, 15.4.0 came back on
+its unmigrated copy with the same clients and a working tunnel, and a later
+retry succeeded. When it also failed the restored version's verification, the
+copy was kept until deletion removed it. An update stopped after taking its copy
+resumed from that copy, and a stopped current container was started again. Each
+failure returned its fixed error code. A fresh 15.5.0 install also passed.

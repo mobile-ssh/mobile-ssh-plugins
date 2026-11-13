@@ -65,7 +65,8 @@ export interface WorkflowJob {
   id: string;
   pluginId: string;
   deploymentId: string;
-  operation: 'setup' | 'health' | 'createClient' | 'revokeClient' | 'delete';
+  /** Bridge 1.4.0 adds 'update'; check MobileSSH.version before offering it. */
+  operation: 'setup' | 'health' | 'createClient' | 'revokeClient' | 'update' | 'delete';
   status: 'READY' | 'RUNNING' | 'WAITING_INPUT' | 'PAUSED' | 'SUCCEEDED' | 'FAILED' | 'CANCELLED';
   revision: number;
   state: Record<string, unknown>;

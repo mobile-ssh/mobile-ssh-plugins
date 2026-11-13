@@ -18,7 +18,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '1.3.0';
+  var VERSION = '1.4.0';
 
   if (window.MobileSSH) return; // already injected
 

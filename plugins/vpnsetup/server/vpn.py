@@ -14,16 +14,30 @@ import time
 import urllib.error
 import urllib.request
 
-IMAGE = "ghcr.io/wg-easy/wg-easy:15.4.0@sha256:0e7bc9d34e86ddcaa92bc700d4d7dc9b33291dbc07ac8d13382f7c2095f949ec"
+IMAGE = "ghcr.io/wg-easy/wg-easy:15.5.0@sha256:071f79a639e9361123a5e57733107320207b844ddbbd92dfa6962f541fe8aac8"
 BASE = Path("/opt/mobile-ssh-vpn")
 
 
 class OperationError(Exception):
-    pass
+    """A fixed message; code is one of the fixed error codes the native host may pass on."""
+
+    def __init__(self, message, code="vpn_operation_failed"):
+        super().__init__(message)
+        self.code = code
+
+
+def image_version(reference):
+    """wg-easy x.y.z of a digest-pinned or tagged image reference, or None."""
+    match = re.fullmatch(r"ghcr\.io/wg-easy/wg-easy:(\d{1,3}\.\d{1,3}\.\d{1,3})(?:@sha256:[0-9a-f]{64})?",
+                         reference or "")
+    return match.group(1) if match else None
 
 
 def run(argv):
-    result = subprocess.run(argv, capture_output=True, timeout=600, check=False)
+    try:
+        result = subprocess.run(argv, capture_output=True, timeout=600, check=False)
+    except subprocess.TimeoutExpired:
+        raise OperationError("Command timed out: " + argv[0]) from None
     if result.returncode:
         # Do not expose subprocess output: it can include environment/config.
         raise OperationError("Command failed: " + argv[0])
@@ -116,6 +130,16 @@ def compose_run(root, *args):
                 "--file", str(root / "compose.json"), *args])
 
 
+def running_image(root):
+    """Image reference the deployment's container was created from, or None."""
+    try:
+        value = json.loads(run(["docker", "inspect", "--format", "{{json .Config.Image}}",
+                                "mobile-ssh-wg-" + root.name]))
+    except (OperationError, ValueError):
+        return None
+    return value if isinstance(value, str) else None
+
+
 class API:
     def __init__(self, secrets):
         self.opener = urllib.request.build_opener(urllib.request.ProxyHandler({}),
@@ -144,12 +168,12 @@ class API:
         return value
 
 
-def wait_api(secrets):
-    for attempt in range(60):
+def wait_api(secrets, attempts=60):
+    for attempt in range(attempts):
         try:
             return API(secrets)
         except OperationError:
-            if attempt == 59:
+            if attempt == attempts - 1:
                 raise
             time.sleep(2)
 
@@ -222,6 +246,136 @@ def bootstrap(root, request, args):
     return {"healthy": True, "image": IMAGE, **create_client(root, api, args, request)}
 
 
+def verify(root, secrets):
+    api = wait_api(secrets)
+    run(["docker", "exec", "mobile-ssh-wg-" + root.name, "wg", "show", "wg0"])
+    return api
+
+
+def copy_directory(source, target):
+    """Replace target with a complete copy of source; a partial copy never takes its name, and the
+    old target is renamed aside before it is removed, so target is missing only between two renames."""
+    staging, aside = target.with_name(target.name + ".tmp"), target.with_name(target.name + ".old")
+    for path in (staging, aside):
+        if path.exists():
+            shutil.rmtree(path)
+    shutil.copytree(source, staging, symlinks=True)
+    os.chmod(staging, 0o700)
+    if target.exists():
+        os.replace(target, aside)
+    os.replace(staging, target)
+    if aside.exists():
+        shutil.rmtree(aside)
+
+
+# wg-easy migrates its database in /etc/wireguard on start (15.5.0 adds columns and rewrites
+# the iptables hooks to an {{interface}} placeholder 15.4.0 does not expand), so the previous
+# version can only run on a copy taken before the new one started. The copy is removed once
+# the new version is verified: it would keep the keys of clients revoked later, and restoring
+# it by hand would bring them back. A copy left by an interrupted update stays until the next
+# verified update or the deployment's deletion removes it.
+BACKUPS = ("wireguard.previous", "compose.previous.json")
+
+
+def discard_backup(root):
+    for name in (*BACKUPS, "wireguard.previous.tmp", "wireguard.tmp", "wireguard.previous.old", "wireguard.old"):
+        path = root / name
+        if path.is_dir():
+            shutil.rmtree(path)
+        elif path.exists():
+            path.unlink()
+
+
+def configured_image(path):
+    try:
+        return json.loads(path.read_text())["services"]["wg-easy"]["image"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+def client_keys(api):
+    """Each client's id and public key: an update keeps every client exactly."""
+    return sorted((str(item.get("id")), str(item.get("publicKey"))) for item in api.clients())
+
+
+ROLLED_BACK = ("WireGuard update failed; the previous version was restored", "update_rolled_back")
+
+
+def update(root, args):
+    if args.get("image", IMAGE) != IMAGE:
+        raise OperationError("Unsupported wg-easy image")
+    if not all((root / name).exists() for name in ("credentials.json", "initialized", "compose.json")) \
+            or not (root / "wireguard").is_dir():
+        raise OperationError("Finish setup before updating")
+    secrets = json.loads((root / "credentials.json").read_text())
+    # Download first: a failed or interrupted download leaves the running VPN untouched.
+    try:
+        run(["docker", "pull", IMAGE])
+    except (OperationError, subprocess.TimeoutExpired):
+        raise OperationError("Could not download the WireGuard update; the VPN was not changed",
+                             "update_not_downloaded") from None
+    current = {"healthy": True, "version": image_version(IMAGE), "current": True}
+    backed_up = all((root / name).exists() for name in BACKUPS)
+    configured = configured_image(root / "compose.json")
+    if running_image(root) == IMAGE and configured == IMAGE:
+        # Already on the pin. An interrupted update or rollback can leave it stopped: start it
+        # (a no-op when it runs), and fall back to the copy it left if it still does not answer.
+        try:
+            compose_run(root, "up", "-d")
+            verify(root, secrets)
+        except Exception:
+            if not backed_up:
+                raise
+            restore(root, json.loads((root / BACKUPS[1]).read_text()), secrets, True)
+            raise OperationError(*ROLLED_BACK) from None
+        discard_backup(root)
+        return {**current, "updated": False}
+    # With a copy present, compose.json names the pin while the container does not run it only when
+    # an update stopped after taking that copy: it is the only record of the previous version, so keep it.
+    resumed = backed_up and configured == IMAGE
+    previous = json.loads((root / (BACKUPS[1] if resumed else "compose.json")).read_text())
+    try:
+        before = client_keys(wait_api(secrets, attempts=1))
+    except OperationError:
+        before = None  # Not answering, as after an interrupted update: nothing to compare.
+    copied = resumed
+    try:
+        # Stop first so the copy holds a consistent database.
+        compose_run(root, "stop")
+        if not resumed:
+            copy_directory(root / "wireguard", root / BACKUPS[0])
+            private_json(root / BACKUPS[1], previous)
+            copied = True
+        private_json(root / "compose.json", compose(root))
+        compose_run(root, "up", "-d", "--force-recreate")
+        api = verify(root, secrets)
+        if before is not None and client_keys(api) != before:
+            raise OperationError("The update changed the WireGuard clients")
+    except Exception:
+        restore(root, previous, secrets, copied)
+        raise OperationError(*ROLLED_BACK) from None
+    discard_backup(root)
+    return {**current, "updated": True}
+
+
+def restore(root, previous, secrets, copied):
+    try:
+        try:
+            compose_run(root, "stop")
+        except OperationError:
+            pass  # Recreating below replaces a container that would not stop (or timed out).
+        if copied:
+            copy_directory(root / BACKUPS[0], root / "wireguard")
+        private_json(root / "compose.json", previous)
+        compose_run(root, "up", "-d", "--force-recreate")
+        verify(root, secrets)
+    except Exception:
+        # The copy stays for manual recovery and the next update; delete still removes it.
+        raise OperationError("WireGuard update failed and the previous version did not restart; "
+                             "check the server", "update_restore_failed") from None
+    discard_backup(root)
+
+
 def operate(request):
     if os.geteuid() != 0:
         raise OperationError("Protected operation requires sudo")
@@ -244,13 +398,18 @@ def operate(request):
                 if child.name != "lock":
                     shutil.rmtree(child) if child.is_dir() else child.unlink()
             return {"deleted": True}
+        if operation == "update":
+            return update(root, args)
         if not (root / "credentials.json").exists():
             raise OperationError("Managed VPN deployment does not exist on this host")
         api = wait_api(json.loads((root / "credentials.json").read_text()))
         if operation == "health":
             run(["docker", "exec", "mobile-ssh-wg-" + root.name, "wg", "show", "wg0"])
             clients = [{key: item.get(key) for key in ("id", "name", "enabled")} for item in api.clients()]
-            return {"healthy": True, "clients": clients, "image": IMAGE}
+            running = running_image(root)
+            version = image_version(running)
+            return {"healthy": True, "clients": clients, "image": IMAGE, "current": running == IMAGE,
+                    **({"version": version} if version else {})}
         if operation == "createClient":
             return create_client(root, api, args, request)
         if operation == "revokeClient":
@@ -272,5 +431,6 @@ if __name__ == "__main__":
         print(json.dumps(operate(json.loads(payload)), separators=(",", ":")))
     except Exception as error:
         message = str(error) if isinstance(error, OperationError) else "Protected VPN operation failed"
-        print(json.dumps({"error": {"code": "vpn_operation_failed", "message": message}}))
+        code = error.code if isinstance(error, OperationError) else "vpn_operation_failed"
+        print(json.dumps({"error": {"code": code, "message": message}}))
         sys.exit(1)
