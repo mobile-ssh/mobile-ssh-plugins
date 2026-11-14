@@ -68,11 +68,33 @@ until that operation finishes. Opening the page never starts a setup. While a
 setup that holds no cloud resource is unfinished, **Set up a VPN** reads
 **Continue VPN setup** and opens that setup's question instead of starting
 another; **Stop workflow** on it is the way to start over. A setup that may
-have sent a create is not continued that way, and once stopped it reads "cloud
-resources may exist", not "nothing created". Setups that VPN Setup 1.0.2 or
-earlier stopped at their checks keep that version's recovery, so they are not
-continued either: the page counts them and suggests **Stop workflow**. The page
-redraws only what changed, and a waiting step's reason stays shown beside it.
+have sent a create, including one whose recovery then moved on to new
+credentials or settings, is not continued that way, and once stopped it reads
+"cloud resources may exist", not "nothing created". A setup on a server the
+user created in the console, or brought, reads "your server remains" once it
+has the server's address. Setups that VPN Setup 1.0.2 or earlier stopped at
+their checks keep that version's recovery, so they are not continued either:
+the page counts them and, before bridge 1.5.0, says that updating Mobile SSH
+clears them. Stopping never removes an entry from the list. The page redraws
+only what changed, and a waiting step's reason stays shown beside it.
+
+With Mobile SSH bridge 1.5.0 or newer, **Remove from list** clears an entry
+that holds nothing: all its operations ended, none of its cloud resources is
+left undeleted, every create it sent got a 2xx answer or was looked up since,
+no setup of it since its last finished delete may have sent a create or begun
+installing on a server, and its VPN was never finished or has been deleted.
+When the app finds more than the page can see, such as a create an older VPN
+Setup never looked up, the page offers **Delete VPN** for that entry instead.
+The app asks once
+for confirmation, checks again itself and removes only this phone's history of
+it; nothing changes in the cloud. A line under **Set up a VPN** counts the
+setups that created nothing and clears them all with one confirmation, first
+stopping those an older VPN Setup left at its checks. A setup on the user's own
+server is left out of that line: removing it on its own says that the server
+stays and that an SSH key the setup created for it is forgotten. On that bridge an
+operation that stopped or failed while only waiting on a question no longer
+blocks a new one on its VPN, and one stopped at its approval leaves the VPN to
+manage; on older hosts such an operation blocks, as in 1.0.3.
 
 Every resource receipt retains its provider ID, ownership and deletion status.
 A lost creation response is reconciled against a stable deployment name;
@@ -82,7 +104,72 @@ resource that is still in use or locked just after its server is deleted is
 deleted again after a wait, within the same polling limit. A deletion that
 pauses shows the provider's error code and a short, capped message. Canceling
 a job does not delete resources or stop charges. Resume or review cleanup
-afterward.
+afterward. A create that got no 2xx answer is noted until a lookup by the
+deployment's name settles it. Before a delete, or a setup's own cleanup,
+removes anything, it looks up every such create, including those the app lists
+for setups of older VPN Setup versions: what it finds gets a receipt and is
+deleted with the rest, and the app checks that lookup before it removes the
+entry from its list. A delete, or a setup's own cleanup, that stopped or failed
+part-way says how many cloud resources remain and lists each by kind (server,
+public IP, firewall, SSH key and so on) as deleted or remaining. Once its
+server, public IP or resource group is deleted, the VPN's management is no
+longer offered; a delete refused before it removed any of them leaves the VPN
+manageable. Phases an older VPN Setup copied into later operations never hide
+it. A receipt with no deletion of its own, such as a firewall rule, counts as
+deleted with what holds it. **Delete VPN** starts a new delete with the
+installed VPN Setup for a delete that stopped part-way, a setup whose cleanup
+did, or a stopped setup that holds or may have made cloud resources: on every
+bridge once that job ended, and from bridge 1.5.0 also while it still waits on
+its question. The new delete takes over from the stopped one: it starts from
+the receipts as the stopped job left them, deletes only what remains (a
+resource the provider no longer has counts as deleted), retries a Hetzner
+resource that is still in use, and removes the VPN profiles and saved server
+like any delete. Hetzner's own in-use, locked or conflict code (passed from
+bridge 1.5.0) keeps the full polling limit. An older app passes only an opaque
+code for a refused answer, as it does for refusals that never clear such as
+delete protection, so a Hetzner HTTP 422, 409 or 423 with only that code is
+sent again for about three minutes, then pauses naming the likely causes and
+the console. A refused or interrupted deletion's recovery checks the cloud
+first by default and sends again only what is still there, so a removal the
+provider already took, such as a Lightsail detach or a Scaleway power-off, is
+not sent twice. A Scaleway server powered on, or still starting, is powered off
+before its deletion. A DigitalOcean reserved IP has no name to look up: when an
+interrupted request may have made one and its region has an unassigned reserved
+IP, the lookup first reads the Droplet that request named. While that Droplet
+exists, an IP the request made would be assigned to it, so the unassigned one
+is not counted, unless it is still locked: DigitalOcean is then still assigning
+an IP, which may be this VPN's. When the Droplet is gone, or the IP is still
+locked, it pauses and asks you to check the IP in the console. The check the
+app sends in place of an answer lost when it was closed mid-request pauses the
+same way, since DigitalOcean may still be assigning the IP then; checking again
+later reads the Droplet. When a lookup finds another server or other resource
+than the one the VPN's receipt names, for example after you deleted a duplicate
+in the console, the delete also deletes the receipt's resource after the rest,
+or confirms it gone. A creation an older VPN Setup sent before **Change server
+settings** changed a setting in its request's address is looked up where it
+went, after the rest of the VPN is deleted: the region for AWS and Oracle
+Cloud, the project, region or zone for Google Cloud, the subscription for
+Azure, the zone for Scaleway, and the project or API account region for
+OVHcloud. If it made something there, or cannot be checked there, the delete
+pauses and names where to check in the console, since this VPN's settings no
+longer point there. A Scaleway project or Oracle Cloud compartment is not part
+of that address: after such a change, a lookup may search only the new project
+or compartment, so check the earlier one in the console yourself. A delete
+declined or stopped before it removed anything, for a setup that never reached
+its server, still offers **Delete VPN** while that setup holds or may have made
+cloud resources. **Change server settings** waits until a creation that got no
+answer has been looked up, so its request is never sent again blind, and a
+delete never offers it. After **Update cloud account credentials** picks other
+credentials, finding nothing proves nothing until they find one of the VPN's
+resources: they may reach another account. The setup or delete then reads
+another of its resources first, and pauses if there is none or it is not there.
+That pause offers **These credentials are for the same account**, for a new or
+renewed token of the same account. Once you confirm it when asked again, what
+they find, or do not find, counts.
+A creation refused for its credentials (HTTP 401 or 403) made nothing, so when
+it is the only one sent, new credentials need no such check. **Resume earlier delete** continues the stopped attempt with
+the VPN Setup version that started it. A new operation carries over the
+receipts of the job it starts from, never that job's progress or errors.
 
 Only UDP 51820 is exposed for WireGuard; TCP 51821 binds to 127.0.0.1 and can be
 accessed through an SSH tunnel. TCP 22 is limited to the selected source CIDR.

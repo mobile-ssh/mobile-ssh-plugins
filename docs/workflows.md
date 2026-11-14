@@ -44,6 +44,12 @@ changes, and profile writes require it.
 Use `MobileSSH.workflows.create/list/get/answer/resume/cancel/review` and
 `subscribe` for UI. Answers require the current revision and request ID.
 `review` can also re-enter a lost cloud credential on a paused HTTP intent.
+From bridge 1.5.0 the re-entered values must be the ones the reference held
+(the host keeps a salted fingerprint beside it), and no saved account is
+offered there. Other values end that intent unsent: its worker gets an `error`
+event with code `CREDENTIAL_CHANGED` (the intent keeps it as its result, so a
+create stays unsettled). Credentials the worker then asks for get a reference
+of their own.
 `openVpn` opens native profiles/Android consent; `export` opens native file/QR
 review without returning config text; `openAdmin` opens a native SSH loopback
 tunnel and a service WebView without a plugin bridge. `forgetCredential` removes
@@ -58,6 +64,53 @@ step reaches the worker as an `error` event whose `code` is
 `UPDATE_NOT_DOWNLOADED` (nothing changed), `UPDATE_ROLLED_BACK` (the previous
 version runs again) or `UPDATE_RESTORE_FAILED` (the rollback failed too, so the
 server's VPN is down); every other failure stays `operation_interrupted`.
+
+Bridge 1.5.0 adds `workflows.remove({deploymentIds})` (1 to 50 deployment ids).
+It clears finished deployments from this phone's journal after one native
+confirmation: their jobs and pinned bundle copies. Cloud account credentials,
+VPN profiles and saved servers always stay; only the removed deployments' own
+approvals, SSH keys and client configurations that no remaining job uses are
+forgotten. Nothing changes in the cloud. A deployment is removable only when
+every job ended (`SUCCEEDED`, `FAILED` or `CANCELLED`) holding at most an
+`input` step, no owned resource receipt is undeleted, no create is unsettled,
+no job since its last finished delete may have sent a create (a cloud request
+in its journal that is neither a read nor a removal, or a stop in or after
+creating), and no VPN of it still exists (a finished setup with no later
+deletion). A create is settled by its own 2xx answer, or by a read the worker
+names for it in a job state's `reconciled` map (the create's step id to the
+read's): read-only, on the create's origin with a path equal to, under or
+above the create's, written after the create was last sent, and answered 2xx,
+404 or Lightsail's `NotFoundException`; a create whose own row holds the
+executor's recovery read may name itself. A create sent again under its step id
+before anything settled it keeps its earlier row as `<id>#<attempt>`, unsettled
+until a read is named for that id. The host does not check which cloud account
+a settling read reached (credentials entered again under a reference must be
+the ones it held, and others get a new reference): the worker must. A read
+named in the state written with the new send counts as one named earlier. A
+finished delete settles none, and what a read found needs a receipt like
+anything created. A new `delete` job's
+`inputs.unresolved` lists the unsettled creates (`id`, `method`, `url`, and
+for Lightsail `target`), set by the host only. The host checks again under its
+lock once the user accepts. It resolves
+`{removed, refused: [{deploymentId, code}]}` with code `WORKFLOW_IN_PROGRESS`,
+`VPN_STILL_EXISTS` (a VPN no delete has removed any part of),
+`WORKFLOW_RESOURCES_REMAIN` or `WORKFLOW_NOT_FOUND`; when none is removable it
+rejects with the first code and shows no dialog, and a declined confirmation
+rejects with `INPUT_CANCELLED`.
+From the same version a `CANCELLED` or `FAILED` job holding only an `input`
+step no longer blocks a new operation on its deployment: creating one drops
+that question, and the old job can no longer resume. A job holding any other
+step, which may be a request in flight, or a native result its worker has not
+read yet, still blocks. Jobs from `list` and `get` carry `blocking` (whether
+the job blocks a new operation now) and `superseded` (a newer operation
+replaced it). A lifecycle job starts
+from the deployment's latest job state, so a delete started after a stopped one
+sees which resources that one already removed. Check `MobileSSH.version` before
+offering either. From the same version a refused cloud response keeps the
+provider's own `error.code` when it is a lowercase identifier
+(`^[a-z][a-z0-9_]{0,39}$`, such as Hetzner's `resource_in_use`):
+`{code: 'CLOUD_HTTP_ERROR', error: {code}}`. Older hosts send `{code}` alone. A
+Scaleway power-off counts as a removal, like a `DELETE`.
 
 VPN Setup's `update` asks for native approval, then runs the pinned installer's
 `update`: it downloads the pinned wg-easy image before changing anything, notes
@@ -76,6 +129,89 @@ include `version` (the running wg-easy x.y.z, when known) and `current`
 keys and imported VPN profiles are kept. A phone connected through the server
 has its tunnel to it stopped before the session opens and reconnects by hand.
 Its recovery offers a read-only check, an explicit retry, or stopping.
+
+VPN Setup 1.0.4 uses both from bridge 1.5.0: **Remove from list** for an entry
+that holds nothing, and one action that stops and removes every setup that
+created nothing. **Delete VPN** starts a new delete for a delete that stopped
+part-way, a setup whose own cleanup did, or a stopped setup that holds or may
+have made cloud resources, on any bridge once nothing blocks (from 1.5.0 also
+over a stopped job's question). That new delete skips receipts already marked
+deleted, treats HTTP 404 as already gone, and retries Hetzner's
+`resource_in_use`, `locked` and `conflict` answers within the polling limit. A
+host before 1.5.0 replaces every refused body with `{code: 'CLOUD_HTTP_ERROR'}`,
+which Hetzner refusals that never clear (delete protection, a firewall applied
+elsewhere) also give: a Hetzner HTTP 422, 409 or 423 with only that code, on a
+deletion other than the primary IPv4's, is sent again for about three minutes,
+then pauses naming those causes and the console. A refused or interrupted
+deletion's recovery reads the cloud first by default and sends again only what
+is still there and not already going, so a removal the provider took (a
+Lightsail detach, a Scaleway power-off) is not sent twice. A receipt with no
+deletion of its own (a firewall rule, a server's ports or network interface,
+an Azure group's resources) is marked deleted with what holds it. Its worker
+drops the stopped job's progress fields, such as `interruptedPhase`, `httpStage`
+and `creationAbsent`, so its own recovery never offers a recreation, and
+requeues Scaleway disks an earlier delete left after their server went. Each
+create it sends sets `creationSent`, and `unanswered` maps the create's step id
+to its resource until a 2xx answer or a lookup settles it; the lookup's step id
+goes to `reconciled`. Before a delete (or a setup's own cleanup) removes
+anything, it looks up each unsettled create, and each one the host lists in
+`inputs.unresolved`, by the deployment's name: what it finds gets a receipt
+and is deleted with the rest. A listed create its own note already names keeps
+that resource; an older version's is matched by its request, and between
+resources made by the same request (GCP, Vultr and Scaleway firewall rules) by
+the graph position in its step id. A Scaleway power-on counts as made once its
+server is anything but stopped, so a server still starting is powered off
+before its deletion. A DigitalOcean reserved IP is named nowhere: absent from
+the lookup, it counts as not made while no reserved IP in its region is
+unassigned, since one whose Droplet went is unassigned too, or once a read
+shows that the Droplet its create named still exists (an IP that create made
+would be assigned to it) and none unassigned there is `locked`, as a new IP is
+while DigitalOcean assigns it. The executor's recovery read, sent in place of a
+lost answer, never reads that Droplet: it pauses, and a later reconcile does. A
+lookup that finds another resource than the receipt held for it keeps that
+receipt as a spare (key `<key>~<id>`), which is deleted after the rest, or
+found gone, so the host's ledger sees it go. So does the read after a create
+whose answer gave another id. Google Cloud answers an insert with an Operation,
+so its network and address receipts take the Operation's `targetId`, the id
+their read gives (the name, for one with none, which its read then keeps as a
+spare). VPN Setup 1.0.3 and older took the Operation's own id, and the host's
+ledger keeps a row for it. A delete of a setup they stopped before that read
+deletes the resource by name under that id, so the row goes. Once their read
+replaced it, no state names that id again and nothing the worker can read gives
+it back: its row stays `created`, and the host refuses to remove that entry
+(`WORKFLOW_RESOURCES_REMAIN`) even after a clean delete. A listed create whose
+URL matches no current request, because an older version sent it before new
+settings changed a setting that URL holds (the AWS or Oracle Cloud region, the
+Google Cloud project, region or zone, the Azure subscription, the Scaleway
+zone, or the OVHcloud project or endpoint), is looked up where it went once
+everything else is deleted: the lookup's URL gets the same change (and a
+Lightsail lookup is signed for that region). Not found there, that lookup
+settles it alone; found, or not readable there, the delete pauses naming where
+to check. A Scaleway project or Oracle Cloud compartment is sent in the body,
+not the URL: after only such a change the create still matches the current
+request, and its lookup, which filters by the current project or compartment,
+may not see what it made. A setup's recovery
+refuses new settings while a create is unsettled, since its create would go out
+again under the same step id; a delete's recovery, or a setup's once its own
+cleanup began, offers neither new settings nor a new creation attempt. Each
+setup notes the credential reference its first create used (`cloudRef`). After
+the user picks other credentials in a recovery, an answer that something is not
+there (HTTP 404, Lightsail's `NotFoundException`, an empty lookup) settles or
+deletes nothing until those credentials found one of the deployment's
+resources: it reads another resource the deployment holds first, and pauses
+when there is none or it is not there. That pause offers `sameAccount`
+("These credentials are for the same account"), which asks again
+(`sameAccountConfirmed` or `back`) before they count as the deployment's own.
+A create refused with HTTP 401 or 403 made nothing: when it is the only create
+sent and the deployment holds nothing, `cloudRef` is cleared. The page reads
+these notes along with the phases
+a setup's or delete's own recovery leaves (`interruptedPhase`,
+`suspendedPhase`, `accountResumePhase`) before calling a stopped setup's create
+harmless; other operations' copies of those phases from older versions are
+ignored. From bridge 1.5.0, an operation stopped at its approval leaves its
+VPN to manage. A delete that stopped before it removed anything, of a setup
+that never reached its server (no host to manage), offers **Delete VPN** again
+while that setup holds or may have made cloud resources.
 
 VPN Setup checks the chosen offering with read-only requests before asking for
 approval. A check that fails on a successful response pauses with a short

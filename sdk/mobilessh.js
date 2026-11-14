@@ -18,7 +18,7 @@
 (function () {
   'use strict';
 
-  var VERSION = '1.4.0';
+  var VERSION = '1.5.0';
 
   if (window.MobileSSH) return; // already injected
 
@@ -136,6 +136,7 @@
       export: function (options) { return invoke('workflows.export', options); },
       openAdmin: function (options) { return invoke('workflows.openAdmin', options); },
       forgetCredential: function (options) { return invoke('workflows.forgetCredential', options); },
+      remove: function (options) { return invoke('workflows.remove', options); },
       subscribe: function (options, onState) {
         var stopped = false, timer = null, revision = -1;
         function poll() { if (stopped) return;

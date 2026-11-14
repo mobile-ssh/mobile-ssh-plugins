@@ -17,7 +17,7 @@ function mock() {
 test('bounded exec sends byte limit and preserves NUL output', async () => {
   const m = mock();
   const result = m.window.MobileSSH.ssh.exec('git status', { maxOutputBytes: 2097152, timeoutMs: 500 });
-  assert.equal(m.window.MobileSSH.version, '1.4.0');
+  assert.equal(m.window.MobileSSH.version, '1.5.0');
   assert.deepEqual(m.request(), { method: 'ssh.exec', args: {
     command: 'git status', timeoutMs: 500, maxOutputBytes: 2097152
   } });
@@ -59,4 +59,15 @@ test('workflow replies carry revision guards and native export never returns con
   assert.deepEqual(m.request(), { method: 'workflows.export', args: { id: 'job', clientId: '1' } });
   m.window.__mobileSSH._resolve('request', null, '{"opened":true}');
   assert.equal((await exported).opened, true);
+});
+
+test('removing workflow entries sends only the deployment ids and reports refusals', async () => {
+  const m = mock();
+  const removed = m.window.MobileSSH.workflows.remove({ deploymentIds: ['one', 'two'] });
+  assert.deepEqual(m.request(), { method: 'workflows.remove', args: { deploymentIds: ['one', 'two'] } });
+  m.window.__mobileSSH._resolve('request', null, '{"removed":["one"],"refused":[{"deploymentId":"two","code":"VPN_STILL_EXISTS"}]}');
+  assert.deepEqual(JSON.parse(JSON.stringify(await removed)), { removed: ['one'], refused: [{ deploymentId: 'two', code: 'VPN_STILL_EXISTS' }] });
+  const declined = m.window.MobileSSH.workflows.remove({ deploymentIds: ['one'] });
+  m.window.__mobileSSH._resolve('request', 'INPUT_CANCELLED', null);
+  await assert.rejects(declined, /INPUT_CANCELLED/);
 });

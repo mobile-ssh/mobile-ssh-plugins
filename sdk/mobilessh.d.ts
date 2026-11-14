@@ -71,6 +71,10 @@ export interface WorkflowJob {
   revision: number;
   state: Record<string, unknown>;
   pendingStep: ({ id: string; kind: string; form?: string } & Record<string, unknown>) | null;
+  /** Bridge 1.5.0: a newer operation on its deployment replaced this stopped job; it cannot resume. */
+  superseded?: boolean;
+  /** Bridge 1.5.0: this job keeps its deployment from starting another operation. */
+  blocking?: boolean;
   createdAt: number;
   updatedAt: number;
 }
@@ -88,6 +92,16 @@ export interface WorkflowsApi {
   /** Open the owned server's administration over a native loopback SSH tunnel. */
   openAdmin(options: { id: string }): Promise<{ opened: boolean }>;
   forgetCredential(options: { id: string }): Promise<{ forgotten: boolean }>;
+  /**
+   * Bridge 1.5.0: removes finished deployments (1–50 ids) from this phone's workflow list after one native
+   * confirmation; nothing changes in the cloud. A deployment is removable only when every job ended holding at most
+   * an input step, no owned receipt is left undeleted, every create got a 2xx answer or a later read the worker names
+   * for it in `state.reconciled` (docs/workflows.md), no setup since its last finished delete may have sent a create,
+   * and no VPN of it still exists.
+   * Refusals: WORKFLOW_IN_PROGRESS, WORKFLOW_RESOURCES_REMAIN, VPN_STILL_EXISTS, WORKFLOW_NOT_FOUND. Rejects with the
+   * first refusal when none is removable, and with INPUT_CANCELLED when the user declines.
+   */
+  remove(options: { deploymentIds: string[] }): Promise<{ removed: string[]; refused: { deploymentId: string; code: string }[] }>;
   subscribe(options: { id: string }, onState: (job: WorkflowJob) => void): () => void;
 }
 

@@ -65,6 +65,10 @@ function harness(initial, options = {}) {
       review: respond('review', ({ id }) => plain(jobs.find(job => job.id === id))),
       resume: respond('resume', ({ id }) => plain(jobs.find(job => job.id === id))),
       cancel: respond('cancel', ({ id }) => plain(jobs.find(job => job.id === id))),
+      // Bridge 1.5.0: the native confirmation was accepted and every entry asked for held nothing.
+      remove: respond('remove', ({ deploymentIds }) => {
+        jobs = jobs.filter(job => !deploymentIds.includes(job.deploymentId)); return { removed: deploymentIds, refused: [] };
+      }),
       openVpn: respond('openVpn', () => ({ opened: true })), export: respond('export', () => ({ opened: true })),
       openAdmin: respond('openAdmin', () => ({ opened: true })), forgetCredential: respond('forgetCredential', () => ({ forgotten: true }))
     }
@@ -107,6 +111,15 @@ const stoppedSetup = (resources = {}) => ({ id: 'setup-beta', deploymentId: 'bet
   needsCredential: false, createdAt: NOW, updatedAt: NOW,
   pendingStep: { kind: 'input', id: 'beta-provider', form: 'provider', title: 'Where should your VPN run?', fields: [] },
   state: { deploymentId: 'beta', name: 'mssh-beta', operation: 'setup', phase: 'provider', inputs: {}, resources } });
+// The recording's VPN: VPN Setup 1.0.0's delete paused when Hetzner refused the firewall (still in use) after the server and
+// its IPv4 were gone, and the user then stopped it: CANCELLED, still holding its recovery question.
+const halfway = (status = 'CANCELLED', extra = {}) => job('delete-1', 'delete', status, 61, {
+  revision: 6, pendingStep: { kind: 'input', id: 'alpha-recovery', form: 'recovery', title: 'Setup needs attention', fields: [] }, ...extra,
+  state: { phase: 'recovery', interruptedPhase: 'cleanup',
+    error: { code: 'workflow_failed', message: 'Cloud firewall deletion failed (HTTP 422, resource_in_use: firewall with ID 22 is still in use). Remaining resources are retained for retry.' },
+    resources: { key: { provider: 'hetzner', type: 'key', id: 11, owned: true, status: 'created' }, firewall: { provider: 'hetzner', type: 'firewall', id: 22, owned: true, status: 'created' },
+      address: { provider: 'hetzner', type: 'address', id: 44, owned: true, status: 'deleted' }, server: { provider: 'hetzner', type: 'server', id: 33, owned: true, status: 'deleted' } },
+    ...extra.state } });
 const recovery = () => job('delete-1', 'delete', 'WAITING_INPUT', 61, {
   revision: 5, pendingStep: { kind: 'input', id: 'alpha-recovery', form: 'recovery', title: 'Setup needs attention', fields: [] },
   state: { phase: 'recovery', error: { code: 'workflow_failed', message: 'Cloud firewall deletion failed (HTTP 422, resource_in_use: firewall with ID 22 is still in use). Remaining resources are retained for retry.' } } });
@@ -460,22 +473,39 @@ test('a setup holding cloud resources, or a stopped one, does not block a new se
 });
 
 test('nothing on the page changes between polls while a setup waits on its settings question', async () => {
-  const h = harness([unchecked('gamma', 70), ...established(), stoppedSetup()]); await flush();
-  assert.equal(h.get('problem').hidden, false);
-  const before = h.changes(), disabled = h.disabled(), rebuilt = ['deployments', 'history', 'resources', 'clients'].map(id => h.get(id).rebuilt);
-  const delays = [];
-  for (let poll = 0; poll < 6; poll++) delays.push(await h.poll());
-  assert.deepEqual(delays, Array(6).fill(10000));
-  assert.equal(h.changes(), before, 'no text, visibility or list changed');
-  assert.deepEqual(['deployments', 'history', 'resources', 'clients'].map(id => h.get(id).rebuilt), rebuilt);
-  assert.equal(h.disabled(), disabled, 'no control was disabled again');
-  // A real change is drawn once and then holds still.
-  h.jobs = [unchecked('gamma', 72, { state: { error: { code: 'workflow_failed', message: 'Hetzner Cloud has no location fsn1.' } } }), ...established(), stoppedSetup()];
-  await h.poll();
-  assert.equal(h.get('problem').textContent, 'Hetzner Cloud has no location fsn1.');
-  const after = h.changes();
-  for (let poll = 0; poll < 3; poll++) await h.poll();
-  assert.equal(h.changes(), after);
+  // Beside it: a delete stopped part-way, a stopped setup and one an older VPN Setup left at its checks. From bridge 1.5.0
+  // they bring Delete VPN, the cloud list, Remove from list and the clear line, which must hold still as well.
+  for (const version of [undefined, '1.5.0']) {
+    const others = () => [halfway(), ...established(), stoppedSetup(), olderCheck('old1', 5)], lists = ['deployments', 'history', 'resources', 'clients', 'cloud'];
+    const h = harness([unchecked('gamma', 70), ...others()], { version }); await flush();
+    assert.equal(h.get('problem').hidden, false);
+    assert.equal(h.get('leftover').hidden, !version, version);
+    const idle = async () => {
+      const before = h.changes(), disabled = h.disabled(), rebuilt = lists.map(id => h.get(id).rebuilt);
+      const delays = [];
+      for (let poll = 0; poll < 6; poll++) delays.push(await h.poll());
+      assert.deepEqual(delays, Array(6).fill(10000));
+      assert.equal(h.changes(), before, 'no text, visibility or list changed');
+      assert.deepEqual(lists.map(id => h.get(id).rebuilt), rebuilt);
+      assert.equal(h.disabled(), disabled, 'no control was disabled again');
+    };
+    await idle();
+    const select = h.get('deployments');
+    for (const [id, shown] of [['alpha', 'cloud'], ['beta', version ? 'remove' : 'resume']]) {
+      select.focus(); select.value = id; select.onchange(); await flush();
+      assert.equal(h.get(shown).hidden, false, id + ' on bridge ' + version);
+      assert.equal(h.get('finish').hidden, !(version && id === 'alpha'));
+      await idle();
+    }
+    select.focus(); select.value = 'gamma'; select.onchange(); await flush();
+    // A real change is drawn once and then holds still.
+    h.jobs = [unchecked('gamma', 72, { state: { error: { code: 'workflow_failed', message: 'Hetzner Cloud has no location fsn1.' } } }), ...others()];
+    await h.poll();
+    assert.equal(h.get('problem').textContent, 'Hetzner Cloud has no location fsn1.');
+    const after = h.changes();
+    for (let poll = 0; poll < 3; poll++) await h.poll();
+    assert.equal(h.changes(), after);
+  }
 });
 
 test('native error codes are never shown as they are', async () => {
@@ -495,11 +525,13 @@ const olderCheck = (id, minutes) => unchecked(id, minutes, {
   pendingStep: { kind: 'input', id: id + '-recovery', form: 'recovery', title: 'Setup needs attention', fields: [] },
   state: { error: { code: 'workflow_failed', message: 'Droplet region and size could not be verified. Check account permissions, region, plan and Ubuntu 24.04 image.' } } });
 
-test('setups an older VPN Setup stopped at its checks are not continued, and the page says how to clear them', async () => {
+test('setups an older VPN Setup stopped at its checks are not continued, and before bridge 1.5.0 the page says an update clears them', async () => {
   const one = harness([olderCheck('old1', 30), ...established()]); await flush();
   assert.equal(one.get('new').textContent, 'Set up a VPN');
   assert.equal(one.get('new-hint').hidden, false);
-  assert.equal(one.get('new-hint').textContent, 'An earlier setup stopped at its checks and created nothing. Choose Stop workflow on it to clear it.');
+  // Stopping one never removed it from the list, so the hint does not send the user there.
+  assert.equal(one.get('new-hint').textContent, 'An earlier setup stopped at its checks and created nothing. Update Mobile SSH to clear it from this list.');
+  assert.equal(one.get('leftover').hidden, true, 'no clear action before bridge 1.5.0');
   // Its reason still shows when it is the VPN on the page.
   assert.equal(one.get('title').textContent, 'mssh-old1');
   assert.equal(one.get('problem').textContent, 'Droplet region and size could not be verified. Check account permissions, region, plan and Ubuntu 24.04 image.');
@@ -507,7 +539,7 @@ test('setups an older VPN Setup stopped at its checks are not continued, and the
   assert.deepEqual(made(one).map(call => call[1].operation), ['setup']);
   assert.ok(!one.calls.some(call => call[0] === 'review'));
   const three = harness([olderCheck('old1', 30), olderCheck('old2', 31), olderCheck('old3', 32), ...established()]); await flush();
-  assert.equal(three.get('new-hint').textContent, '3 earlier setups stopped at their checks and created nothing. Choose Stop workflow on each to clear them.');
+  assert.equal(three.get('new-hint').textContent, '3 earlier setups stopped at their checks and created nothing. Update Mobile SSH to clear them from this list.');
   // A setup of this version beside them is the one continued, with its own hint.
   const mixed = harness([olderCheck('old1', 30), unchecked('gamma', 20)]); await flush();
   assert.equal(mixed.get('new').textContent, 'Continue VPN setup');
@@ -566,4 +598,484 @@ test('native codes a retry cannot change say so, and stale answers read as a cha
     await h.get('review').click();
     assert.equal(h.get('job-error').textContent, shown, code);
   }
+});
+
+const demo = (latest = halfway()) => [latest, job('health-2', 'health', 'SUCCEEDED', 40), job('client-1', 'createClient', 'SUCCEEDED', 30), ...established()];
+const texts = list => list.children.map(item => item.textContent);
+
+test('a delete stopped part-way says what it left in the cloud, by kind, on every bridge', async () => {
+  for (const version of [undefined, '1.3.0', '1.4.0', '1.5.0']) {
+    const h = harness(demo(), { version }); await flush();
+    assert.deepEqual(labels(h.get('deployments')), ['mssh-alpha · Delete stopped · 2 cloud resources remain'], 'bridge ' + version);
+    assert.equal(h.get('status').textContent, 'Delete stopped · 2 cloud resources remain');
+    assert.equal(h.get('cloud').hidden, false);
+    assert.deepEqual(texts(h.get('cloud')), ['SSH key · remains', 'Firewall · remains', 'Public IP · deleted', 'Server · deleted']);
+    assert.ok(texts(h.get('cloud')).every(line => !/\d/.test(line)), 'no provider ids');
+    assert.match(h.get('problem').textContent, /HTTP 422, resource_in_use/, 'why it stopped');
+  }
+  for (const [latest, shown] of [
+    [halfway('FAILED'), 'Delete failed · 2 cloud resources remain'],
+    // Kept after its recovery: the worker ended it, but the VPN is half gone, not ready.
+    [halfway('SUCCEEDED', { pendingStep: null, state: { phase: 'cancelled' } }), 'Delete stopped · 2 cloud resources remain'],
+    [halfway('CANCELLED', { pendingStep: null, state: { phase: 'cleanupLocal', interruptedPhase: undefined, error: null,
+      resources: { server: { type: 'server', id: 33, owned: true, status: 'deleted' }, key: { type: 'key', id: 11, owned: false, status: 'existing' } } } }),
+    'Delete stopped · cloud resources deleted'],
+    // Declined at its approval: nothing was removed.
+    [job('delete-1', 'delete', 'SUCCEEDED', 61, { state: { phase: 'cancelled' } }), 'Ready']]) {
+    const h = harness(demo(latest), { version: '1.5.0' }); await flush();
+    assert.equal(h.get('status').textContent, shown);
+    assert.equal(h.get('cloud').hidden, shown === 'Ready');
+    assert.equal(h.get('finish').hidden, shown === 'Ready');
+    // Kept after its recovery, it has nothing left to resume.
+    if (latest.status === 'SUCCEEDED' && shown !== 'Ready') {
+      assert.equal(h.get('resume').hidden, true);
+      assert.equal(h.get('finish-note').textContent, 'Delete VPN removes what remains with this version of VPN Setup.');
+    }
+  }
+  const odd = halfway('CANCELLED', { state: { resources: { constructor: { type: 'toString', id: 'x', owned: true, status: 'created' } } } });
+  const h = harness(demo(odd), { version: '1.5.0' }); await flush();
+  assert.deepEqual(texts(h.get('cloud')), ['Cloud resource · remains']);
+});
+
+test('before bridge 1.5.0 a stopped delete still blocks and offers only Resume', async () => {
+  const h = harness(demo(), { version: '1.4.0' }); await flush();
+  assert.equal(h.get('finish').hidden, true);
+  assert.equal(h.get('finish-note').hidden, true);
+  assert.equal(h.get('resume').hidden, false);
+  assert.equal(h.get('resume').textContent, 'Resume');
+  assert.equal(h.get('remove').hidden, true);
+  assert.match(h.get('blocked').textContent, /Delete has not finished/);
+  assert.equal(h.get('delete').hidden, true);
+});
+
+test('from bridge 1.5.0 a stopped delete offers Delete VPN with this version, and Resume continues the earlier attempt', async () => {
+  const h = harness(demo(), { version: '1.5.0' }); await flush();
+  assert.equal(h.get('finish').hidden, false);
+  assert.equal(h.get('finish').textContent, 'Delete VPN');
+  assert.equal(h.get('finish-note').textContent, 'Delete VPN removes what remains with this version of VPN Setup. Resume continues the earlier attempt as it was.');
+  assert.equal(h.get('resume').textContent, 'Resume earlier delete');
+  assert.equal(h.get('resume').hidden, false);
+  assert.equal(h.get('cancel').hidden, true);
+  // Its server may be gone: checks, clients and updates are not offered, and nothing says it is blocked.
+  assert.equal(h.get('manage').hidden, true);
+  assert.equal(h.get('blocked').hidden, true);
+  assert.equal(h.get('remove').hidden, true, 'it still holds cloud resources');
+  await h.get('finish').click();
+  assert.deepEqual(plain(made(h).map(call => call[1])), [{ operation: 'delete', inputs: { deploymentId: 'alpha' } }]);
+  assert.equal(h.get('job-error').hidden, true);
+  // The new delete is the one shown now; the stopped one stays in the history.
+  assert.deepEqual(h.get('history').children.slice(0, 2).map(li => li.textContent.split(' · ').slice(0, 2).join(' · ')), ['Delete · Starting', 'Delete · Stopped']);
+  assert.equal(h.get('finish').hidden, true);
+  assert.equal(h.get('resume').textContent, 'Resume');
+  assert.equal(h.get('cloud').hidden, true);
+  const r = harness(demo(), { version: '1.5.0' }); await flush();
+  await r.get('resume').click();
+  assert.deepEqual(plain(r.calls.filter(call => call[0] === 'resume')), [['resume', { id: 'delete-1', revision: 6 }]]);
+  const refused = harness(demo(), { version: '1.5.0', create: async () => { throw new Error('A deployment operation is already pending'); } });
+  await flush(); await refused.get('finish').click();
+  assert.match(refused.get('job-error').textContent, /Another operation on this VPN has not finished/);
+});
+
+test('from bridge 1.5.0 a stopped or failed job holding only a question no longer blocks new operations', async () => {
+  const question = { kind: 'input', id: 'alpha-recovery', form: 'recovery', title: 'Setup needs attention', fields: [] };
+  const stopped = (status, step) => [job('health-3', 'health', status, 50, { pendingStep: step, state: { phase: 'recovery', interruptedPhase: 'health' } }), ...established()];
+  for (const [version, status, step, blocked] of [['1.4.0', 'CANCELLED', question, true], ['1.5.0', 'CANCELLED', question, false], ['1.5.0', 'FAILED', question, false],
+    // A request that may be in flight still blocks, as does a job that has not stopped.
+    ['1.5.0', 'CANCELLED', { kind: 'ssh', id: 'alpha-health-0' }, true], ['1.5.0', 'WAITING_INPUT', question, true]]) {
+    const h = harness(stopped(status, step), { version }); await flush();
+    const why = version + ' ' + status + ' ' + step.kind;
+    assert.equal(h.get('blocked').hidden, !blocked, why);
+    assert.equal(h.get('health').hidden, blocked, why);
+    assert.equal(h.get('delete').hidden, blocked, why);
+    assert.equal(h.get('finish').hidden, true, 'not a delete: ' + why);
+  }
+  // Native says which jobs block: a stopped job whose last result its worker never read holds no step, yet still does.
+  const unread = harness([job('health-3', 'health', 'CANCELLED', 50, { blocking: true, state: { phase: 'health' } }), ...established()], { version: '1.5.0' });
+  await flush();
+  assert.equal(unread.get('blocked').hidden, false);
+  assert.equal(unread.get('health').hidden, true);
+  assert.equal(unread.get('remove').hidden, true);
+  const freed = harness(stopped('CANCELLED', question).map(item => ({ ...item, blocking: false })), { version: '1.5.0' }); await flush();
+  assert.equal(freed.get('blocked').hidden, true);
+});
+
+test('Remove from list is offered from bridge 1.5.0 only for entries that hold nothing', async () => {
+  const deleted = () => [job('delete-1', 'delete', 'SUCCEEDED', 60, { state: { phase: 'deleted',
+    resources: Object.fromEntries(Object.entries(ready.resources).map(([name, value]) => [name, { ...value, status: 'deleted' }])) } }), ...established()];
+  const setupWith = (id, extra) => [unchecked(id, 70, { status: 'CANCELLED', ...extra })];
+  for (const [jobs, offered, why] of [
+    [[stoppedSetup()], true, 'a setup stopped at its first question'],
+    [setupWith('gamma'), true, 'a setup stopped at its checks'],
+    [deleted(), true, 'a deleted VPN, whose setup receipts the delete superseded'],
+    [established(), false, 'a VPN that still exists'],
+    [demo(), false, 'a delete that left cloud resources'],
+    [[stoppedSetup({ server: { type: 'server', id: 5, owned: true, status: 'created' } })], false, 'a setup holding a server'],
+    [setupWith('gamma', { pendingStep: { kind: 'http', id: 'gamma-provision-0-create-0', method: 'POST' }, state: { phase: 'provision', interruptedPhase: undefined } }),
+      false, 'a setup whose create may have been sent'],
+    [setupWith('gamma', { pendingStep: null, state: { phase: 'recovery', interruptedPhase: 'bootstrap', mode: 'manual' } }), false, 'a setup that began installing on a server'],
+    [[unchecked('gamma', 70)], false, 'a setup of this version still open']]) {
+    const h = harness(jobs, { version: '1.5.0' }); await flush();
+    assert.equal(h.get('remove').hidden, !offered, why);
+    const older = harness(jobs, { version: '1.4.0' }); await flush();
+    assert.equal(older.get('remove').hidden, true, 'bridge 1.4.0: ' + why);
+  }
+  const manual = harness([unchecked('gamma', 70, { status: 'CANCELLED', pendingStep: null, state: { phase: 'recovery', interruptedPhase: 'bootstrap', mode: 'manual' } })]);
+  await flush();
+  assert.equal(manual.get('status').textContent, 'Setup stopped · server may be partly set up');
+});
+
+test('removing an entry selects another one, or shows the empty state after the last', async () => {
+  const h = harness([stoppedSetup(), ...established()], { version: '1.5.0' }); await flush();
+  const select = h.get('deployments'); select.focus(); select.value = 'beta'; select.onchange(); await flush();
+  assert.equal(h.get('remove').hidden, false);
+  await h.get('remove').click();
+  assert.deepEqual(plain(h.calls.filter(call => ['remove', 'cancel'].includes(call[0]))), [['remove', { deploymentIds: ['beta'] }]]);
+  assert.deepEqual(labels(select), ['mssh-alpha · Ready']);
+  assert.equal(h.get('title').textContent, 'mssh-alpha');
+  assert.equal(h.get('remove').hidden, true);
+  assert.equal(h.get('job-error').hidden, true);
+  const last = harness([stoppedSetup()], { version: '1.5.0' }); await flush();
+  await last.get('remove').click();
+  assert.equal(last.get('empty').hidden, false);
+  assert.equal(last.get('picker').hidden, true);
+  assert.equal(last.get('current').hidden, true);
+});
+
+test('a declined confirmation shows nothing and each refusal reads as a plain sentence', async () => {
+  for (const [code, shown] of [['INPUT_CANCELLED', ''],
+    ['WORKFLOW_IN_PROGRESS', 'An operation of this entry has not finished. Stop it or let it finish first.'],
+    ['WORKFLOW_RESOURCES_REMAIN', 'This entry may still hold cloud resources, so it stays in the list. Delete them first.'],
+    ['VPN_STILL_EXISTS', 'This VPN still exists. Delete it first: removing it from the list would not delete it.'],
+    ['WORKFLOW_NOT_FOUND', 'This entry is no longer saved.']]) {
+    const h = harness([stoppedSetup()], { version: '1.5.0', remove: async () => { throw new Error(code); } }); await flush();
+    await h.get('remove').click();
+    assert.equal(h.get('job-error').textContent, shown, code);
+    assert.equal(h.get('job-error').hidden, !shown, code);
+    assert.deepEqual(labels(h.get('deployments')), ['mssh-beta · Setup stopped · nothing created'], 'still listed');
+    assert.equal(h.get('remove').classList.contains('busy'), false);
+  }
+  // Resolved, yet kept: the reason for this one entry.
+  const kept = harness([stoppedSetup()], { version: '1.5.0', remove: async () => ({ removed: [], refused: [{ deploymentId: 'beta', code: 'WORKFLOW_RESOURCES_REMAIN' }] }) });
+  await flush(); await kept.get('remove').click();
+  assert.match(kept.get('job-error').textContent, /may still hold cloud resources/);
+});
+
+test('one action clears every setup that created nothing, stopping open older ones first, with one confirmation', async () => {
+  const stoppedAt = (id, minutes) => unchecked(id, minutes, { status: 'CANCELLED' });
+  const holding = unchecked('delta', 3, { status: 'CANCELLED', state: { interruptedPhase: 'provision', resources: { key: { type: 'key', id: 9, owned: true, status: 'created' } } } });
+  const jobs = () => [unchecked('eps', 80), olderCheck('old1', 30), olderCheck('old2', 31), stoppedAt('gamma', 20), stoppedSetup(), ...established(), holding];
+  const cancel = h => async ({ id }) => { const found = h.jobs.find(item => item.id === id); h.jobs = h.jobs.map(item => item.id === id ? { ...item, status: 'CANCELLED', revision: item.revision + 1 } : item); return plain(found); };
+  let h; h = harness(jobs(), { version: '1.5.0', cancel: args => cancel(h)(args) }); await flush();
+  assert.equal(h.get('leftover').hidden, false);
+  assert.equal(h.get('leftover-text').textContent, '4 earlier setups created nothing.');
+  assert.equal(h.get('clear').textContent, 'Clear them');
+  // The setup of this version is continued as before, beside the line.
+  assert.equal(h.get('new-hint').textContent, 'This continues your unfinished setup. To start over instead, choose Stop workflow on it first.');
+  await h.get('clear').click();
+  const used = plain(h.calls.filter(call => ['cancel', 'remove', 'create', 'review'].includes(call[0])));
+  assert.deepEqual(used, [['cancel', { id: 'setup-old1', revision: 7 }], ['cancel', { id: 'setup-old2', revision: 7 }],
+    ['remove', { deploymentIds: ['old1', 'old2', 'gamma', 'beta'] }]], 'stops only the open older setups, then one removal');
+  assert.deepEqual(h.get('deployments').children.map(option => option.value), ['eps', 'alpha', 'delta']);
+  assert.equal(h.get('leftover').hidden, true);
+  assert.equal(h.get('clear-error').hidden, true);
+  // One left: singular wording.
+  const one = harness([stoppedSetup(), ...established()], { version: '1.5.0' }); await flush();
+  assert.equal(one.get('leftover-text').textContent, 'An earlier setup created nothing.');
+  assert.equal(one.get('clear').textContent, 'Clear it');
+  assert.equal(one.get('new-hint').hidden, true);
+  // Before bridge 1.5.0 there is no clear action.
+  const older = harness(jobs(), { version: '1.4.0' }); await flush();
+  assert.equal(older.get('leftover').hidden, true);
+  // Declined: the older setups stay stopped and listed, and no error shows.
+  const declined = harness(jobs(), { version: '1.5.0', remove: async () => { throw new Error('INPUT_CANCELLED'); } }); await flush();
+  await declined.get('clear').click();
+  assert.equal(declined.get('clear-error').hidden, true);
+  assert.equal(declined.get('deployments').children.length, 7);
+  // Some kept: say how many, and where to look.
+  const partly = harness(jobs(), { version: '1.5.0', remove: async ({ deploymentIds }) => {
+    partly.jobs = partly.jobs.filter(item => !['gamma', 'beta'].includes(item.deploymentId));
+    return { removed: ['gamma', 'beta'], refused: deploymentIds.filter(id => id.startsWith('old')).map(deploymentId => ({ deploymentId, code: 'WORKFLOW_IN_PROGRESS' })) };
+  } });
+  await flush(); await partly.get('clear').click();
+  assert.equal(partly.get('clear-error').textContent, '2 of them stayed in the list. Open each to see why.');
+  assert.equal(partly.get('clear-error').hidden, false);
+});
+
+test('a delete refused before it removed anything leaves its VPN to manage, and one whose server went leaves none, on every bridge', async () => {
+  // "Keep resources and stop" after the server DELETE was refused (a read-only token): nothing was deleted.
+  const kept = job('delete-1', 'delete', 'SUCCEEDED', 61, { state: { phase: 'cancelled', interruptedPhase: 'cleanup',
+    resources: Object.fromEntries(Object.entries(ready.resources).map(([name, value]) => [name, { ...value, type: name }])) } });
+  for (const version of ['1.3.0', '1.4.0', '1.5.0']) {
+    const h = harness(demo(kept), { version }); await flush();
+    assert.equal(h.get('status').textContent, 'Delete stopped · 3 cloud resources remain', version);
+    assert.equal(h.get('manage').hidden, false, version);
+    for (const id of ['health', 'client', 'revoke']) assert.equal(h.get(id).hidden, false, version + ' ' + id);
+    // One delete control: Delete VPN, which every bridge takes once nothing blocks.
+    assert.equal(h.get('finish').hidden, false, version);
+    assert.equal(h.get('delete').hidden, true, version);
+  }
+  // The recording's delete took the server and its IPv4: no profiles, exports or admin for it on any bridge.
+  for (const version of [undefined, '1.4.0', '1.5.0']) {
+    const h = harness(demo(), { version }); await flush();
+    assert.equal(h.get('manage').hidden, true, 'bridge ' + version);
+  }
+  // A new delete waiting at its recovery after the server went: what remains shows, and nothing to manage.
+  const h = harness(demo(halfway('WAITING_INPUT')), { version: '1.5.0' }); await flush();
+  assert.equal(h.get('status').textContent, 'Delete · Needs attention');
+  assert.deepEqual(texts(h.get('cloud')), ['SSH key · remains', 'Firewall · remains', 'Public IP · deleted', 'Server · deleted']);
+  assert.equal(h.get('manage').hidden, true);
+  assert.equal(h.get('review').hidden, false);
+  // A delete that removed only a resource holding no server or address keeps its VPN manageable.
+  const rule = halfway('CANCELLED', { pendingStep: null, state: { phase: 'cancelled', resources: { server: { type: 'server', id: 33, owned: true, status: 'created' },
+    firewall: { type: 'firewall', id: 22, owned: true, status: 'deleted' } } } });
+  const r = harness(demo(rule), { version: '1.5.0' }); await flush();
+  assert.equal(r.get('status').textContent, 'Delete stopped · 1 cloud resource remains');
+  assert.equal(r.get('manage').hidden, false);
+});
+
+test('a setup on a server the user made stays out of the clear action and says the server remains', async () => {
+  const manual = (id, provider) => unchecked(id, 40, { status: 'CANCELLED', pendingStep: { kind: 'input', id: id + '-confirm', form: 'confirm', title: 'Review VPN setup', fields: [] },
+    state: { phase: 'confirm', interruptedPhase: undefined, error: null, provider, mode: 'manual', host: '192.0.2.40', user: 'ubuntu' } });
+  const h = harness([manual('m1', 'hetzner'), stoppedSetup()], { version: '1.5.0' }); await flush();
+  assert.deepEqual(labels(h.get('deployments')), ['mssh-m1 · Setup stopped · your server remains', 'mssh-beta · Setup stopped · nothing created']);
+  assert.equal(h.get('leftover-text').textContent, 'An earlier setup created nothing.');
+  await h.get('clear').click();
+  assert.deepEqual(plain(h.calls.filter(call => call[0] === 'remove')), [['remove', { deploymentIds: ['beta'] }]]);
+  // Removed only on its own, saying what stays and what is forgotten.
+  assert.equal(h.get('title').textContent, 'mssh-m1');
+  assert.equal(h.get('remove').hidden, false);
+  assert.equal(h.get('remove-note').textContent,
+    'Your server at 192.0.2.40 stays as it is. Any SSH key this setup created for it is forgotten: delete the server in your cloud console if you no longer need it.');
+  const brought = harness([manual('m2', 'existing')], { version: '1.5.0' }); await flush();
+  assert.equal(brought.get('leftover').hidden, true);
+  assert.equal(brought.get('remove-note').textContent, 'Your server at 192.0.2.40 stays as it is. Any SSH key this setup created for it is forgotten.');
+  const older = harness([manual('m2', 'existing')], { version: '1.4.0' }); await flush();
+  assert.equal(older.get('remove-note').hidden, true);
+  // Before it names a server, a manual setup created nothing.
+  const early = harness([unchecked('m3', 40, { status: 'CANCELLED', pendingStep: null, state: { phase: 'manual', interruptedPhase: undefined, mode: 'manual' } })], { version: '1.5.0' });
+  await flush();
+  assert.equal(early.get('status').textContent, 'Setup stopped · nothing created');
+  assert.equal(early.get('leftover').hidden, false);
+  assert.equal(early.get('remove-note').hidden, true);
+});
+
+test('a setup whose recovery moved on from a create is not offered as nothing created', async () => {
+  for (const [state, why] of [[{ phase: 'credential', interruptedPhase: 'provision', accountResumePhase: 'provision' }, 'new credentials asked'],
+    [{ phase: 'options', interruptedPhase: 'provision' }, 'settings changed'], [{ phase: 'deleteConfirm', interruptedPhase: 'provision' }, 'removal reviewed'],
+    [{ phase: 'recreateConfirm', interruptedPhase: 'provision' }, 'recreation reviewed'],
+    // Its checks failed again after the change: only VPN Setup 1.0.4's note still shows the create.
+    [{ phase: 'recovery', interruptedPhase: 'preflight', creationSent: true }, 'checks failed again']]) {
+    const stopped = unchecked('gamma', 70, { status: 'CANCELLED', pendingStep: { kind: 'input', id: 'gamma-next', form: 'instance', title: 'Next', fields: [] }, state });
+    const h = harness([stopped, stoppedSetup()], { version: '1.5.0' }); await flush();
+    assert.equal(h.get('status').textContent, 'Setup stopped · cloud resources may exist', why);
+    assert.equal(h.get('remove').hidden, true, why);
+    assert.equal(h.get('leftover-text').textContent, 'An earlier setup created nothing.', why);
+  }
+});
+
+// States the real worker produces, as the second review drove it.
+const workerContext = vm.createContext({});
+vm.runInContext(fs.readFileSync(path.join(__dirname, '..', 'worker.js'), 'utf8'), workerContext);
+const flow = workerContext.MobileSSHWorkflow;
+const step = (t, event) => plain(flow.next(t.state, event));
+const answer = (t, body, status = 200) => step(t, { type: 'result', requestId: t.step.id, result: { status, body } });
+const hetznerReady = () => ({ version: 1, operation: 'setup', deploymentId: 'alpha', name: 'mssh-alpha', phase: 'ready', mode: 'automatic', provider: 'hetzner',
+  inputs: { region: 'fsn1', size: 'cx23', sshCidr: '198.51.100.0/24' }, credentialRef: 'cloud-ref', sshCredentialRef: 'ssh-ref', publicKey: 'ssh-ed25519 AAAA',
+  host: '203.0.113.10', user: 'root', clientSequence: 1, clients: [{ clientId: '1', profileId: 'p1' }],
+  resources: { key: { provider: 'hetzner', type: 'key', id: 11, owned: true, status: 'created' }, firewall: { provider: 'hetzner', type: 'firewall', id: 22, owned: true, status: 'created' },
+    address: { provider: 'hetzner', type: 'address', id: 44, owned: true, status: 'created' }, server: { provider: 'hetzner', type: 'server', id: 33, owned: true, status: 'created' } } });
+const shownControls = h => ['finish', 'resume', 'remove', 'delete', 'health', 'connect'].filter(id => !h.get(id).hidden && !(['delete', 'health', 'connect'].includes(id) && h.get('manage').hidden));
+
+test('a delete stopped part-way and kept offers Delete VPN on every bridge, as 1.0.3 offered its delete', async () => {
+  // Second review, F2: the server went, the primary IPv4 check paused, and the user kept what remained.
+  let t = plain(flow.next({ operation: 'delete', inputs: { deploymentId: 'alpha', deployment: hetznerReady() } }, { type: 'start' }));
+  t = step(t, { type: 'input', value: { approved: true } });
+  t = answer(answer(t, {}, 404), { primary_ip: { id: 44, assignee_id: 999 } });
+  assert.equal(t.step.form, 'recovery');
+  t = step(t, { type: 'input', value: { action: 'keep' } });
+  const kept = job('delete-1', 'delete', 'SUCCEEDED', 61, { state: t.state });
+  for (const version of [undefined, '1.3.0', '1.4.0', '1.5.0']) {
+    const h = harness(demo(kept), { version }); await flush();
+    assert.equal(h.get('status').textContent, 'Delete stopped · 3 cloud resources remain', version);
+    assert.deepEqual(shownControls(h), ['finish'], 'bridge ' + version);
+    assert.equal(h.get('finish-note').textContent, 'Delete VPN removes what remains with this version of VPN Setup.');
+    await h.get('finish').click();
+    assert.deepEqual(plain(made(h).map(call => call[1])), [{ operation: 'delete', inputs: { deploymentId: 'alpha' } }], 'bridge ' + version);
+  }
+  // Declining that new delete leaves the same choice.
+  const declined = halfway('SUCCEEDED', { pendingStep: null, state: { phase: 'cancelled', interruptedPhase: undefined, error: null } });
+  for (const version of ['1.3.0', '1.4.0']) {
+    const h = harness(demo(declined), { version }); await flush();
+    assert.deepEqual(shownControls(h), ['finish'], 'declined on ' + version);
+  }
+});
+
+test('a setup whose own cleanup deleted part of it and was kept offers Delete VPN on every bridge', async () => {
+  // Second review, F3: bootstrap failed, its recovery's cleanup removed the server and IPv4, the firewall stayed refused, then kept.
+  let t = plain(flow.next(Object.assign(hetznerReady(), { phase: 'bootstrap', index: 4, attempt: 0, creationSent: true, clients: [], clientSequence: 0 }), { type: 'resume' }));
+  t = step(t, { type: 'error', requestId: t.step.id, code: 'operation_interrupted' });
+  t = step(t, { type: 'input', value: { action: 'cleanup' } });
+  t = step(t, { type: 'input', value: { approved: true } });
+  t = answer(answer(answer(t, {}, 404), { primary_ip: { id: 44, assignee_id: null } }), {}, 404);
+  for (let i = 0; i < 100 && t.step.kind !== 'input'; i++) t = t.step.kind === 'delay' ? answer(t, {}) : answer(t, { code: 'CLOUD_HTTP_ERROR' }, 422);
+  t = step(t, { type: 'input', value: { action: 'keep' } });
+  const kept = { ...stoppedSetup(), id: 'setup-alpha', deploymentId: 'alpha', status: 'SUCCEEDED', pendingStep: null, state: t.state };
+  for (const version of [undefined, '1.3.0', '1.4.0', '1.5.0']) {
+    const h = harness([kept], { version }); await flush();
+    assert.equal(h.get('status').textContent, 'Setup stopped · 2 cloud resources remain', version);
+    assert.deepEqual(shownControls(h), ['finish'], 'bridge ' + version);
+    assert.equal(h.get('finish-note').textContent, 'Delete VPN deletes what this setup left in the cloud, with this version of VPN Setup.');
+    assert.deepEqual(texts(h.get('cloud')), ['SSH key · remains', 'Firewall · remains', 'Public IP · deleted', 'Server · deleted']);
+  }
+  // Stopped at its recovery instead: on bridge 1.5.0 Delete VPN or Resume, before it Resume alone.
+  const asking = { ...kept, status: 'CANCELLED', pendingStep: { kind: 'input', id: 'alpha-recovery', form: 'recovery', title: 'Setup needs attention', fields: [] },
+    state: { ...t.state, phase: 'recovery' } };
+  const fresh = harness([asking], { version: '1.5.0' }); await flush();
+  assert.deepEqual(shownControls(fresh), ['finish', 'resume']);
+  assert.equal(fresh.get('resume').textContent, 'Resume');
+  assert.match(fresh.get('finish-note').textContent, /Resume continues it as it was\.$/);
+  const older = harness([asking], { version: '1.4.0' }); await flush();
+  assert.deepEqual(shownControls(older), ['resume']);
+  // A setup kept after a create that got no answer has no server to manage, yet Delete VPN looks up and deletes what it made.
+  const cut = unchecked('gamma', 71, { status: 'SUCCEEDED', pendingStep: null, state: { phase: 'cancelled', interruptedPhase: 'provision',
+    unanswered: { 'gamma-provision-0-create-0': 'server' } } });
+  for (const version of ['1.4.0', '1.5.0']) {
+    const h = harness([cut], { version }); await flush();
+    assert.equal(h.get('status').textContent, 'Setup stopped · cloud resources may exist');
+    assert.deepEqual(shownControls(h), ['finish'], version);
+  }
+  // One that created nothing still offers only removal.
+  const nothing = harness([stoppedSetup()], { version: '1.5.0' }); await flush();
+  assert.deepEqual(shownControls(nothing), ['resume', 'remove']);
+});
+
+test('from bridge 1.5.0 an operation stopped at its approval leaves its VPN to manage', async () => {
+  for (const [operationName, phase] of [['update', 'updateConfirm'], ['createClient', 'clientConfirm'], ['delete', 'deleteConfirm']]) {
+    const stoppedAt = job('op-3', operationName, 'CANCELLED', 50, { blocking: false, state: { phase },
+      pendingStep: { kind: 'input', id: 'alpha-' + phase, form: 'confirm', title: 'Review', fields: [] } });
+    const h = harness([stoppedAt, ...established()], { version: '1.5.0' }); await flush();
+    assert.deepEqual(shownControls(h), ['resume', 'delete', 'health', 'connect'], phase);
+    assert.equal(h.get('blocked').hidden, true, phase);
+    // Before it, that stopped approval still blocks: Resume alone, as in 1.0.3.
+    const older = harness([stoppedAt, ...established()], { version: '1.4.0' }); await flush();
+    assert.deepEqual(shownControls(older), ['resume'], phase + ' on 1.4.0');
+  }
+  // An approval still open is a question to answer first.
+  const open = harness([job('op-3', 'update', 'WAITING_INPUT', 50, { state: { phase: 'updateConfirm' },
+    pendingStep: { kind: 'input', id: 'alpha-updateConfirm', form: 'confirm', title: 'Review', fields: [] } }), ...established()], { version: '1.5.0' });
+  await flush();
+  assert.equal(open.get('manage').hidden, true);
+});
+
+test('fields an older VPN Setup copied into a later operation never hide its VPN', async () => {
+  // Second review, F7: a 1.0.3 manual delete failed at its SSH step and was kept; Check server then found the VPN running.
+  const manual = { mode: 'manual', provider: 'existing', resources: {} };
+  for (const extra of [{ interruptedPhase: 'deleteServer' }, { suspendedPhase: 'cleanupLocal' }, { interruptedPhase: 'cleanup' }]) {
+    const checked = job('health-3', 'health', 'SUCCEEDED', 70, { state: { ...manual, phase: 'ready', ...extra } });
+    for (const version of [undefined, '1.4.0', '1.5.0']) {
+      const h = harness([checked, job('delete-2', 'delete', 'SUCCEEDED', 60, { state: { ...manual, phase: 'cancelled', interruptedPhase: 'deleteServer' } }),
+        { ...job('setup-alpha', 'setup', 'SUCCEEDED', 10), state: { ...ready, ...manual } }], { version }); await flush();
+      assert.equal(h.get('status').textContent, 'Ready', JSON.stringify(extra));
+      assert.equal(h.get('manage').hidden, false, JSON.stringify(extra) + ' ' + version);
+      assert.deepEqual(shownControls(h), ['delete', 'health', 'connect']);
+      assert.equal(h.get('cloud').hidden, true);
+    }
+  }
+  // A delete's own stop there still means its VPN went.
+  const own = job('delete-2', 'delete', 'CANCELLED', 60, { state: { ...manual, phase: 'recovery', interruptedPhase: 'cleanupLocal' },
+    pendingStep: { kind: 'input', id: 'alpha-recovery', form: 'recovery', title: 'Delete needs attention', fields: [] } });
+  const h = harness([own, ...established()], { version: '1.5.0' }); await flush();
+  assert.equal(h.get('manage').hidden, true);
+});
+
+test('an entry with a create no read settled, or one native found holding more, is offered Delete VPN, not removal', async () => {
+  // VPN Setup 1.0.4 notes a create that got no answer until a lookup settles it.
+  const noted = unchecked('gamma', 71, { status: 'CANCELLED', pendingStep: null, state: { phase: 'cancelled', interruptedPhase: 'preflight',
+    unanswered: { 'gamma-provision-0-create-0': 'server' } } });
+  const h = harness([noted, stoppedSetup()], { version: '1.5.0' }); await flush();
+  assert.equal(h.get('remove').hidden, true);
+  assert.equal(h.get('leftover-text').textContent, 'An earlier setup created nothing.');
+  assert.equal(h.get('finish').hidden, false);
+  // An older VPN Setup's entry the page counts as empty: native refuses it for a create it cannot see, and Delete VPN takes over.
+  const older = harness([stoppedSetup()], { version: '1.5.0', remove: async () => { throw new Error('WORKFLOW_RESOURCES_REMAIN'); } }); await flush();
+  assert.deepEqual(shownControls(older), ['resume', 'remove']);
+  await older.get('remove').click();
+  assert.match(older.get('job-error').textContent, /may still hold cloud resources/);
+  assert.deepEqual(shownControls(older), ['finish', 'resume']);
+  assert.equal(older.get('leftover').hidden, true, 'not counted as created nothing any more');
+  await older.get('finish').click();
+  assert.deepEqual(plain(made(older).map(call => call[1])), [{ operation: 'delete', inputs: { deploymentId: 'beta' } }]);
+  // A new operation on it shows its own controls again.
+  assert.equal(older.get('finish').hidden, true);
+  // Refused among several: each refused one is remembered.
+  const several = harness([stoppedSetup(), unchecked('gamma', 20, { status: 'CANCELLED' })], { version: '1.5.0', remove: async () => {
+    several.jobs = several.jobs.filter(item => item.deploymentId !== 'gamma');
+    return { removed: ['gamma'], refused: [{ deploymentId: 'beta', code: 'WORKFLOW_RESOURCES_REMAIN' }] };
+  } }); await flush();
+  await several.get('clear').click();
+  assert.equal(several.get('clear-error').textContent, 'One of them stayed in the list. Open it to see why.');
+  assert.equal(several.get('leftover').hidden, true);
+});
+
+test('a delete that finished after a setup stopped while creating leaves an entry Remove from list may clear', async () => {
+  // The setup's droplet POST got a 503 and it was stopped; a delete then looked the droplet up, found none, and finished.
+  const setup = unchecked('gamma', 30, { status: 'CANCELLED', pendingStep: null, state: { phase: 'recovery', interruptedPhase: 'provision', creationSent: true,
+    unanswered: { 'gamma-provision-1-create-0': 'server' }, resources: { key: { provider: 'digitalocean', type: 'key', id: 11, owned: true, status: 'created' } } } });
+  const deleted = { ...setup, id: 'delete-gamma', operation: 'delete', status: 'SUCCEEDED', updatedAt: NOW + 40 * 60000, state: { ...setup.state, phase: 'deleted',
+    interruptedPhase: undefined, unanswered: {}, reconciled: { 'gamma-provision-1-create-0': 'gamma-cleanupFind-1-find-0' },
+    resources: { key: { provider: 'digitalocean', type: 'key', id: 11, owned: true, status: 'deleted' } } } };
+  const h = harness([deleted, setup], { version: '1.5.0' }); await flush();
+  assert.equal(h.get('status').textContent, 'Deleted');
+  assert.deepEqual(shownControls(h), ['remove']);
+  // Before that delete finished, the stopped setup still may hold its droplet.
+  const before = harness([setup], { version: '1.5.0' }); await flush();
+  assert.equal(before.get('remove').hidden, true);
+  // A setup stopped while creating after the last finished delete still keeps the entry.
+  const later = { ...setup, id: 'setup-later', updatedAt: NOW + 50 * 60000, state: { ...setup.state, unanswered: {}, resources: {} } };
+  const again = harness([later, deleted], { version: '1.5.0' }); await flush();
+  assert.equal(again.get('remove').hidden, true);
+});
+
+test('a stopped delete of a setup that never reached its server still offers Delete VPN, on every bridge', async () => {
+  // Third review: every Hetzner resource was made but the server never ran; the setup was kept, then Delete VPN was declined.
+  const keptState = { ...hetznerReady(), host: undefined, clients: [], clientSequence: 0, phase: 'cancelled', interruptedPhase: 'provision', creationSent: true };
+  const setup = { ...stoppedSetup(), id: 'setup-alpha', deploymentId: 'alpha', status: 'SUCCEEDED', pendingStep: null, state: keptState };
+  const start = plain(flow.next({ operation: 'delete', inputs: { deploymentId: 'alpha', deployment: keptState } }, { type: 'start' }));
+  const declined = step(start, { type: 'input', value: { approved: false } });
+  assert.equal(declined.state.phase, 'cancelled');
+  // job() fills in a ready VPN's fields; this one has no server address.
+  const noHost = state => ({ state: { ...state, host: undefined, clients: [] } });
+  const deleteJob = job('delete-1', 'delete', 'SUCCEEDED', 61, noHost(declined.state));
+  for (const version of ['1.3.0', '1.4.0', '1.5.0']) {
+    const h = harness([deleteJob, setup], { version }); await flush();
+    assert.equal(h.get('status').textContent, 'Delete stopped · 4 cloud resources remain', version);
+    assert.deepEqual(shownControls(h), ['finish'], version);
+    assert.equal(h.get('finish-note').textContent, 'Delete VPN removes what remains with this version of VPN Setup.');
+    await h.get('finish').click();
+    assert.deepEqual(plain(made(h).map(call => call[1])), [{ operation: 'delete', inputs: { deploymentId: 'alpha' } }], version);
+  }
+  // A Linode setup whose server POST got no answer holds nothing, yet may have made it: kept after the delete's lookup failed.
+  const cut = { ...keptState, provider: 'linode', inputs: { region: 'us-east', size: 'g6-nanode-1', sshCidr: '198.51.100.0/24' }, resources: {},
+    unanswered: { 'alpha-provision-0-create-0': 'server' } };
+  let lookup = step(plain(flow.next({ operation: 'delete', inputs: { deploymentId: 'alpha', deployment: cut } }, { type: 'start' })), { type: 'input', value: { approved: true } });
+  lookup = answer(lookup, { code: 'CLOUD_HTTP_ERROR' }, 500);
+  const keptDelete = job('delete-1', 'delete', 'SUCCEEDED', 61, noHost(step(lookup, { type: 'input', value: { action: 'keep' } }).state));
+  for (const version of ['1.3.0', '1.4.0', '1.5.0']) {
+    const h = harness([keptDelete, { ...setup, state: cut }], { version }); await flush();
+    assert.equal(h.get('status').textContent, 'Delete stopped · cloud resources may exist', version);
+    assert.deepEqual(shownControls(h), ['finish'], version);
+  }
+  // From bridge 1.5.0 one stopped at its approval offers it too, beside Resume; before it, that approval blocks and Resume alone stays.
+  const atApproval = job('delete-1', 'delete', 'CANCELLED', 61, { ...noHost(start.state), pendingStep: start.step });
+  const fresh = harness([{ ...atApproval, blocking: false }, setup], { version: '1.5.0' }); await flush();
+  assert.deepEqual(shownControls(fresh), ['finish', 'resume']);
+  assert.equal(fresh.get('resume').textContent, 'Resume earlier delete');
+  const older = harness([atApproval, setup], { version: '1.4.0' }); await flush();
+  assert.deepEqual(shownControls(older), ['resume']);
+  // A declined delete of a VPN with its server leaves it to manage, as before; one of a setup that made nothing offers nothing.
+  const vpn = harness([job('delete-1', 'delete', 'SUCCEEDED', 61, { state: { phase: 'cancelled' } }), ...established()], { version: '1.4.0' }); await flush();
+  assert.deepEqual(shownControls(vpn), ['delete', 'health', 'connect']);
+  const nothing = { ...keptState, resources: {}, creationSent: undefined, interruptedPhase: 'preflight' };
+  const empty = harness([job('delete-1', 'delete', 'SUCCEEDED', 61, noHost(nothing)), { ...setup, state: nothing }], { version: '1.4.0' }); await flush();
+  assert.deepEqual(shownControls(empty), []);
 });

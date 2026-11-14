@@ -79,7 +79,8 @@
     const simple = (key, base, body, envelope, listPath, field) => {
       const id = R(key), read = req('GET', base + '/' + enc(id));
       const reconcile = Object.assign(req('GET', base), {match: match(listPath, field || 'name', n)});
-      return known(key, req('POST', base, body), read, entity(envelope, n), null, req('DELETE', base + '/' + enc(id)), reconcile);
+      // envelope: the shape a found list item is wrapped in, the same as the create answer (Scaleway keys have none).
+      return Object.assign(known(key, req('POST', base, body), read, entity(envelope, n), null, req('DELETE', base + '/' + enc(id)), reconcile), {envelope});
     };
     if (s.provider === 'digitalocean') {
       const b = 'https://api.digitalocean.com/v2';
@@ -123,8 +124,10 @@
     if (s.provider === 'gcp') {
       const b='https://compute.googleapis.com/compute/v1/projects/'+enc(p.projectId), zone=b+'/zones/'+enc(p.zone);
       const region=b+'/regions/'+enc(p.region), network=b+'/global/networks/'+n;
+      // An insert answers with its Operation, whose own id is not the resource's: the receipt takes targetId from it, the id
+      // the resource's read gives, so the phone's ledger never holds a row for the Operation.
       const named=(key,base,body,ready)=>known(key,req('POST',base,body),req('GET',base+'/'+n),
-        b=>({id:b.id||n,name:n,host:b.address}),ready,req('DELETE',base+'/'+n),
+        b=>({id:(b.kind==='compute#operation'?b.targetId:b.id)||n,name:n,host:b.address}),ready,req('DELETE',base+'/'+n),
         Object.assign(req('GET',base+'/'+n),{match:match('','name',n)}));
       return [named('network',b+'/global/networks',{name:n,autoCreateSubnetworks:true}),
         known('sshFirewall',req('POST',b+'/global/firewalls',{name:n+'-ssh',network,sourceRanges:[p.sshCidr],
@@ -427,6 +430,8 @@
   }
   function http(s, req, stage) {
     s.httpStage=stage;
+    // The page reads creationSent: a stopped setup may hold what this created. cloudRef: the account it went to.
+    if(stage==='create'){s.creationSent=true;s.cloudRef=s.cloudRef||s.credentialRef;}
     return output(s,Object.assign({kind:'http',id:s.deploymentId+'-'+s.phase+'-'+s.index+'-'+stage+'-'+s.attempt},req));
   }
   function pause(s,message) { if(s.phase!=='recovery')s.interruptedPhase=s.phase;s.error={code:'workflow_failed',message};s.phase='recovery';return render(s); }
@@ -443,17 +448,41 @@
       const found=values.filter(x=>get(x,m.field)===m.value);
       if(found.length!==1) return null;
       // Reconstruct single-resource envelopes expected by provider extractors.
-      const envelope={droplets:'droplet',ssh_keys:'ssh_key',firewalls:'firewall',servers:'server',reserved_ips:'reserved_ip',
+      const envelope=typeof op.envelope==='string'?op.envelope:{droplets:'droplet',ssh_keys:'ssh_key',firewalls:'firewall',servers:'server',reserved_ips:'reserved_ip',
         firewall_groups:'firewall_group',instances:'instance',security_groups:'security_group',ips:'ip',primary_ips:'primary_ip',rules:'rule',firewall_rules:'firewall_rule'}[m.path];
       return envelope?{[envelope]:found[0]}:found[0];
     }
     return get(values,m.field)===m.value?b:null;
   }
-  function confirmedAbsent(op,b) {
+  // DigitalOcean names no reserved IP: one an interrupted request made is assigned to the Droplet that request named, unless
+  // that Droplet is gone (deleted in the console, or by an older delete), which leaves it unassigned like any other. Such an
+  // unassigned one in its region counts against absence unless that Droplet was just read (seen: its id). One still locked
+  // counts even then: DigitalOcean assigns a new IP in the background, and it lists unassigned and locked until it is done.
+  const strayIp=(s,op,values,locked)=>s.provider==='digitalocean'&&op.key==='address'&&
+    values.some(x=>!get(x,'droplet.id')&&[undefined,s.inputs.region].includes(get(x,'region.slug'))&&(!locked||x.locked===true));
+  function confirmedAbsent(s,op,b,seen) {
     const m=get(op,'create.reconcile.match');
     if(!m)return false;
     const values=get(b,m.path);
-    return Array.isArray(values)&&values.filter(x=>get(x,m.field)===m.value).length===0;
+    if(!Array.isArray(values)||values.some(x=>get(x,m.field)===m.value))return false;
+    return !strayIp(s,op,values)||(seen!==undefined&&seen===String(get(s.resources,'server.id'))&&!strayIp(s,op,values,true));
+  }
+  // Whether that Droplet is read first, before an unassigned reserved IP stops the lookup: it is held, not known deleted. Not for
+  // the read the phone sends in place of a create's lost answer, maybe while DigitalOcean still assigns what it made: that one
+  // pauses, and the user's later check reads the Droplet.
+  function checkDroplet(s,op,b,seen) {
+    const m=get(op,'create.reconcile.match'),server=s.resources.server;
+    if(seen!==undefined||!m||!server||server.owned!==true||server.id===undefined||server.status==='deleted')return false;
+    const values=get(b,m.path);
+    return Array.isArray(values)&&!values.some(x=>get(x,m.field)===m.value)&&strayIp(s,op,values);
+  }
+  // Where a create went, as a pause names it: host and path, with no query.
+  const shownUrl=u=>String(u||'').replace(/^https:\/\//,'').replace(/[?#].*$/,'').replace(/\/+$/,'');
+  // Why a lookup's answer settles nothing yet: nothing it lists is certainly this VPN's, nor certainly not.
+  function unmatched(s,op) {
+    return s.provider==='digitalocean'&&op.key==='address'
+      ?'DigitalOcean names no reserved IP, and one in '+s.inputs.region+' is unassigned: an interrupted request of this VPN may have made it. Check Networking > Reserved IPs in the DigitalOcean console and delete it there if it is this VPN\'s, then check again.'
+      :'Interrupted creation could not be matched uniquely. Review cloud resources before retrying.';
   }
   // A first page is not proof of absence or uniqueness. Native HTTP preserves
   // continuation headers; fail closed rather than recreate a potentially billed VM.
@@ -494,11 +523,131 @@
   // Hetzner keeps a firewall applied, or a resource locked by a running action, for a
   // short time after its server is gone. Repeating the DELETE is safe and stays within
   // the polling limit. The primary IPv4 already waits for a verified detach instead.
+  // 'provider': Hetzner's own code says so (bridge 1.5.0 passes it). 'opaque': an older
+  // host passed only {code:'CLOUD_HTTP_ERROR'}, as it does for refusals that never clear
+  // (delete protection, a firewall applied elsewhere), so those get a short wait only.
+  const OPAQUE_RETRIES=8; // About 3 minutes of waits; the provider's own code gets the full polling limit.
   function busyDelete(s,op,status,b) {
-    const code=get(b,'error.code');
-    return s.provider==='hetzner'&&s.httpStage==='delete'&&op.key!=='address'&&
-      ((status===422&&code==='resource_in_use')||((status===409||status===423)&&(code==='locked'||code==='conflict')));
+    if(s.provider!=='hetzner'||s.httpStage!=='delete'||op.key==='address')return '';
+    const own=get(b,'error.code'),code=typeof own==='string'?own:get(b,'code');
+    if((status===422&&code==='resource_in_use')||((status===409||status===423)&&['locked','conflict'].includes(code)))return 'provider';
+    return [409,422,423].includes(status)&&code==='CLOUD_HTTP_ERROR'?'opaque':'';
   }
+  // A resource its provider is removing already: its deletion is not sent again while it goes.
+  const leaving=b=>[get(b,'lifecycleState'),get(b,'status'),get(b,'resourceStatus'),get(b,'properties.provisioningState'),get(b,'server.status'),
+    get(b,'server.state'),get(b,'droplet.status'),get(b,'instance.status'),get(b,'instance.state.name')]
+    .some(value=>typeof value==='string'&&/^(deleting|terminating|shutting-down|stopping|deprovisioning)$/i.test(value));
+  // A create sent with no 2xx answer may have made something no receipt shows. unanswered maps its step id to its resource
+  // until a read of the cloud settles it: what it found gets a receipt, or nothing matched. reconciled then maps the create's
+  // step id to that read's, which the phone's host (bridge 1.5.0) checks before it removes the deployment from its list.
+  const mutates=req=>!!req&&!['GET','HEAD'].includes(req.method)&&!req.readOnly;
+  function sent(s,id,key){(s.unanswered=s.unanswered||{})[id]=key;if(s.reconciled)delete s.reconciled[id];}
+  // Creates sent where this graph's URLs no longer point (moved) are settled one by one, by a lookup sent there.
+  function settled(s,key){
+    for(const [id,at] of Object.entries(s.unanswered||{}))if(at===key&&!(s.moved||{})[id]){(s.reconciled=s.reconciled||{})[id]=s.pending;delete s.unanswered[id];}
+  }
+  // Graph positions of the resources creates nothing settled may have made.
+  function unsettled(s){
+    if(!Object.keys(s.unanswered||{}).length)return [];
+    const ops=graph(s);return Object.values(s.unanswered).map(key=>ops.findIndex(op=>op.key===key)).filter(at=>at>=0);
+  }
+  // The host's list of the deployment's creates nothing settled, older VPN Setup versions' included: each is matched to the
+  // resource whose create request it repeats, to be looked up with the others before a delete removes anything. This version's
+  // own notes already name theirs. Resources made by the same request (two firewall rules, say) are told apart by the graph
+  // position in the create's step id, which every version has written the same way.
+  function adopt(s,unresolved){
+    if(!unresolved.length||s.mode!=='automatic')return;
+    let ops;try{ops=graph(s);}catch(_){return;}
+    for(const item of unresolved){
+      if(typeof item.id!=='string'||Object.prototype.hasOwnProperty.call(s.unanswered||{},item.id))continue;
+      const request=ops.filter(x=>mutates(x.create)&&x.create.method===get(item,'method')&&get(x.create,'headers.X-Amz-Target','')===get(item,'target',''));
+      const same=request.filter(x=>x.create.url===get(item,'url'));
+      const at=Number((/-provision-(\d+)-create-/.exec(item.id)||[])[1]);let op=same.find(x=>ops.indexOf(x)===at)||same[0];
+      // Sent by VPN Setup 1.0.0-1.0.3 before Change server settings changed a setting its URL holds (an AWS or Oracle Cloud
+      // region, a Google Cloud project or zone, an Azure subscription, a Scaleway zone, an OVHcloud project or endpoint): the
+      // resource at its graph position is looked up where that create went.
+      if(!op&&typeof item.url==='string'){op=request.find(x=>ops.indexOf(x)===at);if(op&&lookupAt(op,item.url))(s.moved=s.moved||{})[item.id]=item.url;else op=null;}
+      if(op)(s.unanswered=s.unanswered||{})[item.id]=op.key;
+    }
+  }
+  // op's lookup (its create's reconciliation read, else its read) as for a create sent to url in place of op's own URL: the
+  // part of op's URL that differs from url is replaced likewise in the lookup's, with a Lightsail region signed for there too.
+  // null when the lookup's URL does not hold that part.
+  function lookupAt(op,url) {
+    const a=op.create.url,b=String(url),read=op.create.reconcile||op.read;
+    if(!read||!/^https:\/\/[^/?#]+/.test(b))return null;
+    let p=0;while(p<a.length&&p<b.length&&a[p]===b[p])p++;
+    let q=0;while(q<a.length-p&&q<b.length-p&&a[a.length-1-q]===b[b.length-1-q])q++;
+    const from=a.slice(0,a.length-q),to=b.slice(0,b.length-q);
+    if(!read.url.startsWith(from))return null;
+    const there=Object.assign(clone(read),{url:to+read.url.slice(from.length)});
+    if(get(there,'auth.scheme')==='aws'){
+      const region=/^https:\/\/lightsail\.([a-z0-9-]+)\.amazonaws\.com\//.exec(there.url);
+      if(!region)return null;there.auth.region=region[1];
+    }
+    return there;
+  }
+  // Changes a lookup finds as made only once they took effect, not merely their resource existing. A power-on took effect
+  // once its server is anything but stopped: one still starting is powered off before its deletion, as a running one is.
+  const APPLIED={aws:['attachment','firewall'],scaleway:['power']};
+  const applied=(s,op,b)=>s.provider==='scaleway'&&op.key==='power'?!['stopped',undefined].includes(get(b,'server.state')):op.ready(b);
+  // Other cloud credentials, chosen in a recovery, may reach another account than the one this VPN's resources went to
+  // (cloudRef), where finding nothing proves nothing. Until a request with them finds one of its resources, an answer that
+  // something is not there is checked first by reading another resource this VPN holds; with none, or none found, it pauses.
+  // There the user may say they are for the same account (a new or renewed token, say), which they then count as.
+  const elsewhere=s=>!!s.cloudRef&&s.credentialRef!==s.cloudRef;
+  function reached(s){if(elsewhere(s))s.cloudRef=s.credentialRef;}
+  const SAME_ACCOUNT='These credentials are for the same account';
+  const OTHER_ACCOUNT='These cloud credentials are not the ones this VPN\'s resources were created with. If they reach another account, finding nothing there proves nothing, so nothing is counted as gone yet. Choose the original credentials under Update cloud account credentials, or check the cloud console. If they are for the same account (a new or renewed token, say), choose '+SAME_ACCOUNT+'.';
+  // A create refused for its credentials (401, 403) made nothing: with nothing else this VPN may hold, nothing ties it to their account yet.
+  function refused(s,status) {
+    if((status===401||status===403)&&!Object.values(s.resources).some(x=>x&&x.owned&&x.status!=='deleted')&&
+      Object.keys(s.unanswered||{}).every(id=>id===s.pending))delete s.cloudRef;
+  }
+  // stage: what to send again once a held resource was read with them; after: the graph position of one that was not found.
+  function unproven(s,stage,after) {
+    const held=graph(s).findIndex((op,at)=>at>(after===undefined?-1:after)&&at!==s.index&&op.read&&get(s.resources,op.key+'.id')!==undefined&&
+      !['deleted',undefined].includes(get(s.resources,op.key+'.status')));
+    if(held<0)return pause(s,OTHER_ACCOUNT);
+    s.verifyKey=graph(s)[held].key;s.verifyStage=stage;return render(s);
+  }
+  // A receipt for what op made, from its create's answer or a read that found it.
+  // A lookup that finds another one than the receipt held for it (a duplicate deleted in the cloud console, say) leaves that
+  // receipt as a spare: the phone's ledger still holds it, so it is deleted after the rest, where a 404 shows it gone. So does
+  // the read after a create whose answer gave another id (a Google Cloud Operation naming no targetId, say).
+  function record(s,op,value,lookup) {
+    const found=op.extract(value),held=s.resources[op.key];
+    if((lookup||s.httpStage==='read')&&held&&held.owned===true&&held.status!=='deleted'&&held.id!==undefined&&found.id!==undefined&&String(found.id)!==String(held.id)){
+      s.resources[op.key+'~'+String(held.id).replace(/[^A-Za-z0-9_-]/g,'_')]=held;delete s.resources[op.key];
+    }
+    s.resources[op.key]=Object.assign(s.resources[op.key]||{},{provider:s.provider,type:op.key,owned:true,status:'created'},Object.fromEntries(Object.entries(found).filter(([,v])=>v!==undefined)));
+    if(s.provider==='scaleway'&&op.key==='server')for(const volume of Object.values(found.volumes||{}))if(volume.id)s.resources['volume_'+volume.id]={provider:s.provider,type:'volume',id:volume.id,owned:true,status:'created',metadata:{parentId:found.id}};
+  }
+  // Where a delete starts once every create it may hold is accounted for: the last owned receipt not yet deleted, else local cleanup.
+  // With nothing owned, local cleanup at once, unless a create an older version sent elsewhere (moved) is still to be looked up:
+  // a server of the user's own, or a setup stopped before it chose a provider, has no cloud graph to go through.
+  function removal(s) {
+    const ownsCloud=Object.values(s.resources).some(x=>x.owned&&x.status!=='deleted');
+    const lookups=Object.keys(s.moved||{}).some(id=>Object.prototype.hasOwnProperty.call(s.unanswered||{},id));
+    s.phase=ownsCloud||lookups?'cleanup':'cleanupLocal';s.index=ownsCloud?graph(s).length-1:-1;s.httpStage='delete';s.attempt=0;
+    // Disks of a Scaleway server an earlier delete removed are deleted first, as right after their server.
+    const disks=s.phase==='cleanup'&&s.provider==='scaleway'&&get(s.resources,'server.status')==='deleted'?
+      Object.values(s.resources).filter(x=>x&&x.type==='volume'&&x.owned&&x.status!=='deleted'&&x.id):[];
+    if(disks.length){s.extraCleanup=disks.map(x=>({id:x.id,type:'volume',url:'https://api.scaleway.com/instance/v1/zones/'+enc(s.inputs.zone)+'/volumes/'+enc(x.id)}));s.phase='cleanupExtra';}
+    return render(s);
+  }
+  // Spare receipts (record) not yet deleted, each with the DELETE its resource's own receipt would get. Others (a Lightsail
+  // action, which names its resource by the deployment's name and so never leaves a spare) count as deleted with the rest.
+  function spares(s) {
+    const ops=graph(s);
+    return Object.entries(s.resources).filter(([key,x])=>x&&x.owned===true&&x.status!=='deleted'&&x.id!==undefined&&key.startsWith(x.type+'~')&&ops.some(op=>op.key===x.type))
+      .map(([key,x])=>{const op=graph(Object.assign({},s,{resources:Object.assign({},s.resources,{[x.type]:x})})).find(o=>o.key===x.type);
+        return op.remove&&op.remove.method==='DELETE'?{id:x.id,type:x.type,key,url:op.remove.url}:null;}).filter(Boolean);
+  }
+  // Only a setup creates, and only until it began removing what it made: a delete, or a setup's own cleanup, never sends
+  // a create again (its recovery offered new settings, which provisioned a new VPN inside a delete job).
+  const REMOVAL=['cleanupFind','cleanup','cleanupWait','cleanupExtra','extraWait','deleteServer','cleanupLocal'];
+  const creates=s=>s.operation==='setup'&&!REMOVAL.includes(s.interruptedPhase);
   // A setup stopped by its read-only checks before anything was created.
   function unchecked(s) {
     return s.operation==='setup'&&s.interruptedPhase==='preflight'&&!Object.values(s.resources||{}).some(x=>x&&x.owned&&x.status!=='deleted');
@@ -573,10 +722,18 @@
       {value:'edit',label:'Change server settings'},{value:'retry',label:'Check again'},
       ...(s.mode==='automatic'&&CREDENTIALS[s.provider]?[{value:'account',label:'Update cloud account credentials'}]:[]),
       {value:'keep',label:'Stop setup'}]})],reason);
-    if(s.phase==='recovery')return input(s,'recovery','Setup needs attention',[field('action','Next step','reconcile',{type:'select',options:[
-      {value:'reconcile',label:'Check current cloud state'},{value:'retry',label:'Retry reconciliation'},
-      ...(s.creationAbsent?[{value:'recreate',label:'Review a new creation attempt'}]:[]),
-      {value:'edit',label:'Change server settings'},...(s.mode==='automatic'&&CREDENTIALS[s.provider]?[{value:'account',label:'Update cloud account credentials'}]:[]),
+    // A deletion refused or cut off: the default reads the cloud first and sends again only what is still there, since a
+    // removal the provider took may not be sent twice (a Lightsail detach, a Scaleway power-off). Retry sends it at once.
+    // Asked again before other credentials count as the VPN's own account (sameAccount).
+    if(s.phase==='recovery'&&s.sameAccountAsked)return input(s,'recovery','Count these credentials as this VPN\'s account?',[field('action','Next step','back',{type:'select',options:[
+      {value:'back',label:'No, go back'},{value:'sameAccountConfirmed',label:'Yes, they are for the same account'}]})],
+      {error:s.error,message:'Only if they are for the same cloud account as this VPN\'s resources. What they do not find then counts as gone: with another account\'s credentials, a delete could finish while its resources there keep running and billing.'});
+    const removing=['cleanup','cleanupExtra','cleanupWait','extraWait'].includes(s.interruptedPhase);
+    if(s.phase==='recovery')return input(s,'recovery',s.operation==='delete'?'Delete needs attention':'Setup needs attention',[field('action','Next step','reconcile',{type:'select',options:[
+      {value:'reconcile',label:removing?'Check the cloud, then delete what remains':'Check current cloud state'},{value:'retry',label:removing?'Retry the deletion':'Retry reconciliation'},
+      ...(creates(s)&&s.creationAbsent?[{value:'recreate',label:'Review a new creation attempt'}]:[]),
+      ...(creates(s)?[{value:'edit',label:'Change server settings'}]:[]),...(s.mode==='automatic'&&CREDENTIALS[s.provider]?[{value:'account',label:'Update cloud account credentials'}]:[]),
+      ...(elsewhere(s)&&get(s,'error.message')===OTHER_ACCOUNT?[{value:'sameAccount',label:SAME_ACCOUNT}]:[]),
       {value:'cleanup',label:'Review removal of created resources'},{value:'keep',label:'Keep resources and stop'}]})],Object.assign(reason,{resources:s.resources}));
     if(s.phase==='recreateConfirm')return input(s,'confirm','Approve a new creation attempt?',[],{summary:{provider:s.provider,name:s.name,
       resource:graph(s)[s.index].key,warning:'No matching resource was found. Check the cloud console for delayed creation before approving; a new resource can add charges.'}});
@@ -588,12 +745,17 @@
       destructive:s.operation==='revokeClient',summary:{deploymentId:s.deploymentId,host:s.host,clientId:s.targetClientId,operation:s.operation}});
     if(s.phase==='updateConfirm')return input(s,'confirm','Update WireGuard to '+RELEASE+'?',[],{summary:{deploymentId:s.deploymentId,host:s.host,operation:'update',version:RELEASE,
       warning:'Installs wg-easy '+RELEASE+' and restarts WireGuard on the server. Existing clients and VPN profiles stay. If this phone is connected through this server, its VPN is turned off first: reconnect when the update finishes. If the new version does not start, the previous one is restored.'}});
+    // A read of another resource this VPN holds, sent only to learn whether the credentials reach its account (unproven).
+    const verify=s.verifyKey&&['provision','cleanupFind','cleanup','cleanupExtra'].includes(s.phase)&&graph(s).find(op=>op.key===s.verifyKey);
+    if(verify)return http(s,verify.read,'verify');
     if(s.phase==='provision') {
       const op=graph(s)[s.index];
       if(!op){s.host=s.host||get(s.resources,'address.host')||get(s.resources,'server.host');if(!s.host)return pause(s,'Cloud did not return a public IPv4 address');s.phase='bootstrap';return render(s);}
       if(op.key==='key'&&!s.keyChecked&&keyLookup(s))return http(s,request(s,'GET',keyLookup(s)[0]),'keyLookup');
       if(s.httpStage==='reconcile')return http(s,op.create.reconcile||op.read,'reconcile');
-      return http(s,s.httpStage==='read'?op.read:op.create,s.httpStage==='read'?'read':'create');
+      const sending=http(s,s.httpStage==='read'?op.read:op.create,s.httpStage==='read'?'read':'create');
+      if(s.httpStage==='create'&&mutates(op.create))sent(s,sending.step.id,op.key);
+      return sending;
     }
     if(s.phase==='wait'||s.phase==='cleanupWait'||s.phase==='extraWait')return output(s,{kind:'delay',id:s.deploymentId+'-'+s.phase+'-'+s.index+'-'+s.attempt,milliseconds:Math.min(30000,2000*Math.pow(2,Math.min(4,s.attempt))),delayMs:Math.min(30000,2000*Math.pow(2,Math.min(4,s.attempt)))});
     if(['bootstrap','health','createClient','revokeClient','update'].includes(s.phase))return ssh(s,s.phase);
@@ -602,18 +764,39 @@
     if(s.phase==='deleteServer')return ssh(s,'delete');
     if(s.phase==='cleanup') {
       const ops=graph(s);while(s.index>=0&&(!ops[s.index].remove||!s.resources[ops[s.index].key]||!s.resources[ops[s.index].key].owned||s.resources[ops[s.index].key].status==='deleted'))s.index--;
-      if(s.index<0){for(const value of Object.values(s.resources))if(value.owned)value.status='deleted';s.phase='cleanupLocal';return render(s);}
-      if(s.provider==='hetzner'&&ops[s.index].key==='address'&&['delete','deleteCheck'].includes(s.httpStage))
+      if(s.index<0){
+        const spare=spares(s);
+        if(spare.length){s.extraCleanup=spare;s.phase='cleanupExtra';s.httpStage='delete';s.attempt=0;return render(s);}
+        for(const value of Object.values(s.resources))if(value.owned)value.status='deleted';
+        // Creates an older version sent where this VPN's settings no longer point (moved) are looked up last, once the rest is
+        // deleted: one that cannot be looked up there (a project these credentials cannot read, say) never keeps it billing.
+        if(!s.findMoved&&Object.keys(s.moved||{}).some(id=>Object.prototype.hasOwnProperty.call(s.unanswered||{},id))){s.findMoved=true;s.phase='cleanupFind';return render(s);}
+        delete s.findMoved;s.phase='cleanupLocal';return render(s);
+      }
+      // Its own check reads the assignment first, also after a recovery.
+      if(s.provider==='hetzner'&&ops[s.index].key==='address'&&['delete','deleteCheck','deleteRecheck'].includes(s.httpStage))
         return http(s,ops[s.index].read,'deleteCheck');
-      return http(s,s.httpStage==='deleteRead'?ops[s.index].read:ops[s.index].remove,s.httpStage==='deleteRead'?'deleteRead':'delete');
+      const reading=['deleteRead','deleteRecheck'].includes(s.httpStage);
+      return http(s,reading?ops[s.index].read:ops[s.index].remove,reading?s.httpStage:'delete');
+    }
+    // Before a delete removes anything, each create nothing settled is looked up by the deployment's name, as a setup's own
+    // reconciliation does: what it made is then deleted with the rest, or it made nothing.
+    if(s.phase==='cleanupFind') {
+      const ops=graph(s),next=Object.entries(s.unanswered||{}).map(([id,key])=>[id,ops.findIndex(op=>op.key===key)])
+        .find(([id,at])=>at>=0&&!!(s.moved||{})[id]===!!s.findMoved);
+      if(!next){if(!s.findMoved)return removal(s);s.phase='cleanup';s.index=-1;s.httpStage='delete';return render(s);}
+      s.index=next[1];s.finding=next[0];const op=ops[s.index],moved=(s.moved||{})[s.finding];
+      const lookup=moved?lookupAt(op,moved):op.create.reconcile||op.read;
+      if(!lookup)return pause(s,'An earlier attempt of this VPN sent its '+op.key+' creation to '+shownUrl(moved)+', where it cannot be looked up. Check there in the cloud console.');
+      return http(s,lookup,'find');
     }
     if(s.phase==='cleanupLocal')return output(s,{kind:'vpn.cleanup',id:s.deploymentId+'-cleanup-local',deploymentId:s.deploymentId});
     if(s.phase==='cleanupExtra') {
       const item=s.extraCleanup[0];
       if(!item){s.phase='cleanup';s.httpStage='delete';return render(s);}
-      const req=request(s,s.httpStage==='deleteRead'?'GET':'DELETE',item.url);
+      const reading=['deleteRead','deleteRecheck'].includes(s.httpStage),req=request(s,reading?'GET':'DELETE',item.url);
       if(req.method==='DELETE')req.reconcile=request(s,'GET',item.url);
-      return http(s,req,s.httpStage==='deleteRead'?'deleteRead':'delete');
+      return http(s,req,reading?s.httpStage:'delete');
     }
     return output(s);
   }
@@ -622,13 +805,18 @@
     if(!s.phase){
       const prior=get(s,'inputs.deployment');
       const operation=s.operation||'setup';
-      if(prior){s=Object.assign(clone(prior),{operation,targetClientId:get(snapshot,'inputs.clientId'),pending:null,error:null});}
+      if(prior){
+        s=Object.assign(clone(prior),{operation,targetClientId:get(snapshot,'inputs.clientId'),pending:null,error:null});
+        // The snapshot is the deployment's latest job, which may have stopped part-way, such as a delete stopped after
+        // its server went: its receipts carry over, its progress does not (a stale creationAbsent offered recreation).
+        for(const key of ['interruptedPhase','suspendedPhase','httpStage','extraCleanup','creationAbsent','creationSent','allowRecreate','checkStatus','optionProblem','accountResumePhase','verifyKey','verifyStage','dropletCheck','dropletSeen','finding','findMoved','sameAccountAsked'])delete s[key];
+      }
       s.version=1;s.operation=operation;s.deploymentId=s.deploymentId||get(snapshot,'inputs.deploymentId');
       if(!/^[a-zA-Z0-9_-]{1,64}$/.test(s.deploymentId||''))throw new Error('Native runner must supply a stable deploymentId');
       s.name=s.name||'mssh-'+s.deploymentId.toLowerCase().replace(/[^a-z0-9]/g,'').slice(0,20);
       s.resources=s.resources||{};s.inputs=s.inputs||{};s.index=0;s.attempt=0;s.clientSequence=s.clientSequence||0;
       if(operation==='setup')s.phase='provider';
-      else if(operation==='delete')s.phase='deleteConfirm';
+      else if(operation==='delete'){s.phase='deleteConfirm';adopt(s,list(snapshot,'inputs.unresolved'));}
       else if(!s.host||!s.sshCredentialRef)throw new Error('Lifecycle operations require an owned deployment snapshot');
       else if(['health','createClient','revokeClient','update'].includes(operation)){s.phase=operation==='health'?'health':operation==='update'?'updateConfirm':'clientConfirm';if(operation==='createClient')s.clientSequence++;}
       else throw new Error('Unknown workflow operation');
@@ -639,6 +827,8 @@
     if(event.type==='error'){
       const failure=s.phase==='update'&&UPDATE_FAILURES[event.code];
       if(event.code==='UPDATE_RESTORE_FAILED'&&failure)delete s.health; // Its version line would describe a VPN that is down.
+      // Bridge 1.5.0: credentials entered again for a request whose own were gone were not those, so it was not sent with them.
+      if(event.code==='CREDENTIAL_CHANGED')return pause(s,'Other cloud credentials were entered than the ones this step was prepared with, so it was not sent with them. To use them, choose Update cloud account credentials and enter them there. Checking the cloud state asks for the original ones again.');
       return pause(s,failure||'The operation was interrupted. Check current state before retrying.');
     }
     if(event.type==='resume'){if(s.phase==='cancelled'&&s.suspendedPhase)s.phase=s.suspendedPhase;return render(s);}
@@ -665,9 +855,10 @@
         else if(s.phase==='confirm'){if(v.confirmed!==true&&v.approved!==true){s.phase='cancelled';return output(s);}s.phase=s.mode==='manual'?'bootstrap':'provision';s.httpStage='create';}
         else if(s.phase==='deleteConfirm'){
           if(v.confirmed!==true&&v.approved!==true){s.phase='cancelled';return output(s);}
-          const ownsCloud=Object.values(s.resources).some(x=>x.owned&&x.status!=='deleted');
-          s.phase=s.mode==='manual'&&s.host?'deleteServer':ownsCloud?'cleanup':'cleanupLocal';
-          s.index=ownsCloud?graph(s).length-1:-1;s.httpStage='delete';s.attempt=0;
+          s.attempt=0;
+          if(s.mode==='manual'&&s.host){s.phase='deleteServer';s.index=-1;s.httpStage='delete';}
+          else if(unsettled(s).length)s.phase='cleanupFind';
+          else return removal(s);
         }
         else if(s.phase==='clientConfirm'){if(v.confirmed!==true&&v.approved!==true){s.phase='cancelled';return output(s);}s.phase=s.operation;}
         else if(s.phase==='updateConfirm'){if(v.confirmed!==true&&v.approved!==true){s.phase='cancelled';return output(s);}s.phase='update';}
@@ -676,6 +867,9 @@
           s.allowRecreate=true;s.phase='provision';s.httpStage='reconcile';return render(s);
         }
         else if(s.phase==='recovery'){
+          delete s.verifyKey;delete s.verifyStage;delete s.dropletCheck;delete s.dropletSeen;
+          const asked=s.sameAccountAsked;delete s.sameAccountAsked;
+          if(asked&&v.action!=='sameAccountConfirmed')return render(s);
           if(v.action==='keep'){s.phase='cancelled';return output(s);}
           if(s.operation==='update'){s.phase=v.action==='retry'?'update':'health';return render(s);}
           if(unchecked(s)){
@@ -687,14 +881,22 @@
             return render(s);
           }
           if(v.action==='cleanup'){s.phase='deleteConfirm';return render(s);}
+          if(['recreate','edit'].includes(v.action)&&!creates(s))throw new Error(s.operation==='setup'?'This setup began deleting what it created: finish or stop that, then set up a new VPN':
+            'Only a setup creates cloud resources: finish or stop this '+(s.operation==='delete'?'delete':'operation')+', then set up a new VPN');
           if(v.action==='recreate'){if(!s.creationAbsent)throw new Error('Reconcile the missing resource first');s.phase='recreateConfirm';return render(s);}
           if(v.action==='edit'){
             if(Object.values(s.resources).some(x=>x.status!=='deleted'))throw new Error('Clean up created resources before changing their cloud settings');
+            // Its create would go out again under the same step id, and nothing would ever look up what the first one made.
+            if(unsettled(s).length)throw new Error('Check current cloud state first: a creation that got no answer may have made a resource');
             s.optionIndex=0;s.phase=s.mode==='manual'?'manual':OPTIONS[s.provider]?'options':'provider';return render(s);
           }
           if(v.action==='account'){s.accountResumePhase=s.interruptedPhase||'options';s.phase='credential';return render(s);}
+          // The user says these credentials reach the account its resources went to, and confirms it when asked again: what they
+          // find then counts, checked as by reconcile. Any other answer to that second question goes back to the first.
+          if(v.action==='sameAccount'){if(!elsewhere(s))throw new Error('These are the credentials this VPN\'s resources were created with');s.sameAccountAsked=true;return render(s);}
+          if(v.action==='sameAccountConfirmed'){if(!asked||!elsewhere(s))throw new Error('Choose '+SAME_ACCOUNT+' first');s.cloudRef=s.credentialRef;}
           s.phase=s.interruptedPhase||'provision';
-          s.httpStage=['cleanup','cleanupExtra','cleanupWait','extraWait'].includes(s.phase)?(v.action==='retry'?'delete':s.httpStage==='deleteCheck'?'deleteCheck':'deleteRead'):'reconcile';
+          s.httpStage=['cleanup','cleanupExtra','cleanupWait','extraWait'].includes(s.phase)?(v.action==='retry'?'delete':'deleteRecheck'):'reconcile';
           if(s.phase==='cleanupWait')s.phase='cleanup';if(s.phase==='extraWait')s.phase='cleanupExtra';
           if(s.phase==='wait')s.phase='provision';s.attempt=0;
         }
@@ -712,6 +914,18 @@
         if(problem){delete s.checkStatus;return pause(s,problem);}
         s.verified=(s.verified||[]).concat(check.label);s.preflightIndex=(s.preflightIndex||0)+1;return render(s);
       }
+      if(s.httpStage==='verify'&&s.verifyKey){
+        const stage=s.verifyStage,at=graph(s).findIndex(op=>op.key===s.verifyKey),droplet=s.dropletCheck;
+        delete s.verifyKey;delete s.verifyStage;delete s.dropletCheck;s.httpStage=stage;
+        // The Droplet an interrupted reserved-IP create named (checkDroplet): there, the IP that request made would be assigned
+        // to it, so the lookup is sent again counting unassigned ones as not this VPN's. Gone, or unreadable: one may be.
+        if(droplet){
+          if(status<200||status>=300||leaving(b))return pause(s,unmatched(s,graph(s).find(op=>op.key==='address')));
+          reached(s);s.dropletSeen=String(get(s.resources,'server.id'));s.attempt=0;return render(s);
+        }
+        if(status<200||status>=300)return unproven(s,stage,at);
+        reached(s);s.attempt=0;return render(s);
+      }
       if(s.phase==='provision') {
         const op=graph(s)[s.index];
         if(s.httpStage==='keyLookup') {
@@ -725,30 +939,64 @@
           s.httpStage='create';return render(s);
         }
         const recovered=(event.result&&event.result.recovered)||s.httpStage==='reconcile';
-        const recoveryMatch=get(op,'create.reconcile.match');
+        const recoveryMatch=get(op,'create.reconcile.match'),seen=s.dropletSeen;delete s.dropletSeen;
         if(recovered&&recoveryMatch&&incompleteList(s,b,event.result,get(b,recoveryMatch.path),get(op,'create.reconcile.url'))){
           delete s.creationAbsent;delete s.allowRecreate;
           return pause(s,'Cloud reconciliation returned an incomplete list. Check all pages in the cloud console; another resource cannot be created safely.');
         }
-        if(recovered&&notFound(s,status,b))return absentCreation(s);
-        if(status<200||status>=300){if((status===404||status===429||status===503)&&s.httpStage==='read'&&s.attempt<60){s.attempt++;s.phase='wait';return render(s);}return pause(s,'Cloud '+op.key+' request failed ('+providerError(status,b)+'). Review credentials, quota, image and region.');}
+        if(recovered&&notFound(s,status,b)){if(elsewhere(s))return unproven(s,'reconcile');settled(s,op.key);return absentCreation(s);}
+        if(status<200||status>=300){
+          if((status===404||status===429||status===503)&&s.httpStage==='read'&&s.attempt<60){s.attempt++;s.phase='wait';return render(s);}
+          if(s.httpStage==='create'&&!recovered)refused(s,status);
+          return pause(s,'Cloud '+op.key+' request failed ('+providerError(status,b)+'). Review credentials, quota, image and region.');
+        }
         const value=recovered?recoveryBody(op,b):b;
-        if(!value&&confirmedAbsent(op,b))return absentCreation(s);
-        if(!value)return pause(s,'Interrupted creation could not be matched uniquely. Review cloud resources before retrying.');
+        if(!value&&confirmedAbsent(s,op,b,seen)){if(elsewhere(s))return unproven(s,'reconcile');settled(s,op.key);return absentCreation(s);}
+        if(!value&&recovered&&get(event,'result.recovered')!==true&&checkDroplet(s,op,b,seen)){s.verifyKey='server';s.verifyStage='reconcile';s.dropletCheck=true;return render(s);}
+        if(!value)return pause(s,unmatched(s,op));
         delete s.creationAbsent;delete s.allowRecreate;
-        const found=op.extract(value);s.resources[op.key]=Object.assign(s.resources[op.key]||{},{provider:s.provider,type:op.key,owned:true,status:'created'},Object.fromEntries(Object.entries(found).filter(([,v])=>v!==undefined)));
-        if(s.provider==='scaleway'&&op.key==='server')for(const volume of Object.values(found.volumes||{}))if(volume.id)s.resources['volume_'+volume.id]={provider:s.provider,type:'volume',id:volume.id,owned:true,status:'created',metadata:{parentId:found.id}};
+        if(recovered||s.httpStage==='read')reached(s); // Found by a read: these credentials reach its account.
+        record(s,op,value,recovered);
+        // A 2xx answer settles its own create; a read that found the resource settles the creates it may have come from.
+        if(recovered)settled(s,op.key);else if(s.httpStage==='create'&&s.unanswered)delete s.unanswered[s.pending];
         if(s.httpStage==='create'&&!recovered){s.httpStage='read';s.attempt=0;return render(s);}
         if(!op.ready(value)){if(s.attempt++>=60)return pause(s,'Cloud resource did not become ready within the polling limit');s.phase='wait';return render(s);}
         s.index++;s.httpStage='create';s.attempt=0;return render(s);
       }
+      if(s.phase==='cleanupFind') {
+        const op=graph(s)[s.index],m=get(op,'create.reconcile.match'),seen=s.dropletSeen,id=s.finding,moved=id&&(s.moved||{})[id];delete s.dropletSeen;
+        const yet=s.findMoved?' The rest of this VPN is deleted.':' Nothing was deleted yet.';
+        if(notFound(s,status,b)){if(elsewhere(s))return unproven(s,'find');}
+        else {
+          if(status<200||status>=300)return pause(s,'Could not check whether an interrupted '+op.key+' creation made one ('+providerError(status,b)+').'+yet);
+          if(m&&incompleteList(s,b,event.result,get(b,m.path),get(op,'create.reconcile.url')))
+            return pause(s,'Cloud reconciliation returned an incomplete list. Check all pages in the cloud console;'+yet.replace(/^ ./,c=>c.toLowerCase()));
+          const value=m?recoveryBody(op,b):(APPLIED[s.provider]||[]).includes(op.key)&&!applied(s,op,b)?null:b;
+          if(value||!m)reached(s);
+          // Made where this VPN's settings no longer point: its deletion here would go to the wrong place.
+          if(value&&moved)return pause(s,'An earlier attempt of this VPN made its '+op.key+' at '+shownUrl(moved)+', which its settings no longer use, so it is not deleted here. Delete it there in the cloud console, then check again.'+yet);
+          if(value)record(s,op,value,true);
+          else if(m&&!confirmedAbsent(s,op,b,seen)){
+            if(checkDroplet(s,op,b,seen)){s.verifyKey='server';s.verifyStage='find';s.dropletCheck=true;return render(s);}
+            return pause(s,unmatched(s,op));
+          }
+          else if(m&&elsewhere(s))return unproven(s,'find');
+        }
+        if(moved){(s.reconciled=s.reconciled||{})[id]=s.pending;delete s.unanswered[id];delete s.moved[id];}
+        else settled(s,op.key);
+        delete s.finding;s.attempt=0;return render(s);
+      }
       if(s.phase==='cleanup') {
-        const op=graph(s)[s.index];
-        if(busyDelete(s,op,status,b)){
-          if(s.attempt++>=60)return pause(s,'Cloud '+op.key+' stayed in use past the polling limit ('+providerError(status,b)+'). Remaining resources are retained for retry.');
+        const op=graph(s)[s.index],busy=busyDelete(s,op,status,b);
+        if(busy){
+          if(s.attempt++>=(busy==='provider'?60:OPAQUE_RETRIES))return pause(s,busy==='provider'
+            ?'Cloud '+op.key+' stayed in use past the polling limit ('+providerError(status,b)+'). Remaining resources are retained for retry.'
+            :'Hetzner Cloud kept refusing to delete the '+op.key+' ('+providerError(status,b)+'). It may still be attached to something else, or have delete protection on: check it in the Hetzner Cloud Console, then retry. Remaining resources are retained for retry.');
           s.httpStage='deleteRetry';s.phase='cleanupWait';return render(s);
         }
-        if((status<200||status>=300)&&!notFound(s,status,b))return pause(s,'Cloud '+op.key+' deletion failed ('+providerError(status,b)+'). Remaining resources are retained for retry.');
+        if((status<200||status>=300)&&!notFound(s,status,b))return pause(s,'Cloud '+op.key+' deletion failed ('+providerError(status,b)+').'+
+          (get(b,'error.code')==='protected'?' Its delete protection is on: turn it off in the cloud console, then retry.':'')+' Remaining resources are retained for retry.');
+        if(status>=200&&status<300)reached(s);else if(elsewhere(s))return unproven(s,s.httpStage); // Not there, under other credentials.
         if(s.provider==='hetzner'&&op.key==='address'&&s.httpStage==='deleteCheck'&&!notFound(s,status,b)){
           const ip=get(b,'primary_ip'),server=s.resources.server;
           if(!ip||!Number.isSafeInteger(ip.id)||ip.id<=0||String(ip.id)!==String(s.resources.address.id)||
@@ -764,8 +1012,16 @@
         const detached=s.provider==='aws'&&op.key==='attachment'&&!get(b,'staticIp.isAttached',true);
         const stopped=s.provider==='scaleway'&&op.key==='power'&&get(b,'server.state')==='stopped';
         const gone=notFound(s,status,b)||get(b,'lifecycleState')==='TERMINATED'||detached||stopped;
-        if(!gone){if(s.attempt++>=60)return pause(s,'Cloud deletion did not finish within the polling limit');s.phase='cleanupWait';return render(s);}
-        s.resources[op.key].status='deleted';s.index--;s.attempt=0;s.httpStage='delete';
+        if(!gone){
+          // Read first after a recovery: still there and not on its way out, so its deletion is sent again.
+          if(s.httpStage==='deleteRecheck'){if(!leaving(b)){s.httpStage='delete';s.attempt=0;return render(s);}s.httpStage='deleteRead';}
+          if(s.attempt++>=60)return pause(s,'Cloud deletion did not finish within the polling limit');s.phase='cleanupWait';return render(s);
+        }
+        s.resources[op.key].status='deleted';
+        // Later receipts with no deletion of their own went with it: firewall rules, a server's ports or network interface,
+        // an Azure group's resources. Left as they were, a delete stopped later would count them as remaining.
+        const ops=graph(s);for(let at=s.index+1;at<ops.length;at++)if(!ops[at].remove&&get(s.resources,ops[at].key+'.owned')===true)s.resources[ops[at].key].status='deleted';
+        s.index--;s.attempt=0;s.httpStage='delete';
         if(op.key==='server'&&s.provider==='scaleway') {
           s.extraCleanup=Object.values(s.resources.server.volumes||{}).filter(v=>v.id).map(v=>({id:v.id,type:'volume',url:'https://api.scaleway.com/instance/v1/zones/'+enc(s.inputs.zone)+'/volumes/'+enc(v.id)}));
           s.phase='cleanupExtra';
@@ -774,7 +1030,10 @@
       }
       if(s.phase==='cleanupExtra') {
         if((status<200||status>=300)&&status!==404)return pause(s,'Additional cloud resource deletion failed ('+providerError(status,b)+'); its receipt is retained.');
-        if(status===404){const removed=s.extraCleanup.shift();if(s.resources['volume_'+removed.id])s.resources['volume_'+removed.id].status='deleted';s.httpStage='delete';s.attempt=0;return render(s);}
+        if(status===404&&elsewhere(s))return unproven(s,s.httpStage);
+        if(status===404){const removed=s.extraCleanup.shift(),key=removed.key||'volume_'+removed.id;if(s.resources[key])s.resources[key].status='deleted';s.httpStage='delete';s.attempt=0;return render(s);}
+        reached(s);
+        if(s.httpStage==='deleteRecheck'){s.httpStage='delete';s.attempt=0;return render(s);} // Still there after a recovery: deleted again.
         if(s.attempt++>=60)return pause(s,'Additional cloud resource deletion did not finish');
         s.httpStage='deleteRead';s.phase='extraWait';return render(s);
       }
