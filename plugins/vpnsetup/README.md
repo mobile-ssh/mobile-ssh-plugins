@@ -31,6 +31,23 @@ for the console path; more RAM makes installation and upgrades less constrained.
    again, new cloud account credentials, or stopping; never cloud cleanup.
    A setting that cannot be used, such as a location with a space in it, is
    asked again at once with the reason.
+   With Hetzner Cloud (from VPN Setup 1.0.5), the plugin first reads what the
+   account can order now, with read-only requests using the API key, and asks
+   the location, then the server type, from lists. Locations are listed only
+   when a server type can be ordered there now. Server types are listed only
+   when they can be ordered in the chosen location now, are x86 and are not
+   being retired there, cheapest first with their monthly price, cores and
+   memory. The cheapest is suggested and selected, unless an earlier answer can
+   still be ordered; the selected answer is listed first, so agreeing by voice
+   takes it. Each list ends with **Other (type a value)**, which asks the same
+   setting as a text box (by voice, as a typed answer) for any location or
+   server type, such as one the list leaves out; the checks then judge it. A
+   value typed that way is offered again, as entered before, when the settings
+   are asked again (not selected if the list shows it cannot be ordered in that
+   location now). **Change server settings** and new credentials read the
+   lists again, so what is sold out is current. When the lists cannot be read
+   (a refused token, a busy API, an unexpected answer), the questions are typed
+   as before, and the checks say what is wrong.
 5. Review the resources and current provider pricing page. Provisioning begins
    only after native approval. Provider accounts, billing activation, terms,
    capacity and quota approval are completed in the provider's console.

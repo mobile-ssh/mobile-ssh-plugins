@@ -1079,3 +1079,26 @@ test('a stopped delete of a setup that never reached its server still offers Del
   const empty = harness([job('delete-1', 'delete', 'SUCCEEDED', 61, noHost(nothing)), { ...setup, state: nothing }], { version: '1.4.0' }); await flush();
   assert.deepEqual(shownControls(empty), []);
 });
+
+test('a setup reading the Hetzner catalog, or asking from its lists, created nothing and is continued', async () => {
+  const read = { kind: 'http', id: 'gamma-catalog-server_types-1', method: 'GET', url: 'https://api.hetzner.cloud/v1/server_types?per_page=50&page=1' };
+  const asking = { phase: 'catalog', interruptedPhase: undefined, error: undefined, inputs: {} };
+  // Paused natively by a failed read (no network, say): Continue resumes it, which sends the read again.
+  const paused = harness([unchecked('gamma', 70, { status: 'PAUSED', pendingStep: read, state: asking }), ...established()]); await flush();
+  assert.equal(paused.get('new').textContent, 'Continue VPN setup');
+  await paused.get('new').click();
+  assert.deepEqual(plain(paused.calls.filter(call => ['review', 'resume', 'create'].includes(call[0]))), [['resume', { id: 'setup-gamma', revision: 7 }]]);
+  // Stopped there: nothing was created.
+  const stopped = harness([unchecked('gamma', 71, { status: 'CANCELLED', pendingStep: read, state: { ...asking, phase: 'cancelled', suspendedPhase: 'catalog' } })]); await flush();
+  assert.equal(stopped.get('status').textContent, 'Setup stopped · nothing created');
+  // Its listed question shows the question as asked, not the field's label.
+  const question = { kind: 'input', id: 'gamma-options-0', form: 'instance', title: 'Where should the VPN server run?',
+    message: 'Where should the VPN server run? These Hetzner locations can take a new server in your account now. For another one, choose Other.',
+    fields: [{ key: 'region', label: 'Location', type: 'select', default: 'nbg1', options: [{ value: 'nbg1', label: 'nbg1 (suggested) · Nuremberg, DE' }, { value: '(other)', label: 'Other (type a value)' }] }] };
+  const waiting = harness([unchecked('gamma', 72, { pendingStep: question, state: { ...asking, phase: 'options', catalog: { locations: [['nbg1', 'Nuremberg, DE']], types: [] } } })]); await flush();
+  assert.equal(waiting.get('question').textContent, 'Where should the VPN server run?');
+  assert.equal(waiting.get('problem').hidden, true);
+  assert.equal(waiting.get('new').textContent, 'Continue VPN setup');
+  await waiting.get('new').click();
+  assert.deepEqual(waiting.calls.filter(call => call[0] === 'review').map(call => call[1].id), ['setup-gamma']);
+});

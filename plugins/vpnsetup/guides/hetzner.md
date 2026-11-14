@@ -3,8 +3,10 @@
 Create a Cloud project, activate billing, and check server/Primary IP limits.
 Create a read/write API token for this project under Security→API tokens. It is
 project-specific; a read-only token cannot provision or delete resources.
-Enter it in the native credential form. Choose a location and an available
-x86 server type. The plugin verifies the server type and location first.
+Enter it in the native credential form. The plugin then lists the locations
+and x86 server types this project can order now, with their monthly prices,
+and suggests the cheapest; choose **Other (type a value)** to enter another.
+The plugin verifies the server type and location before creating anything.
 The token can be entered directly; no credential file is required.
 
 For console setup:

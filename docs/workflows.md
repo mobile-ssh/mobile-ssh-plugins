@@ -235,6 +235,49 @@ beside `error`. A setting that could not be used (empty, a space, or not an
 IPv4 CIDR for the SSH source) is asked again at once with its reason as
 `message` and `error`; it never stops the setup.
 
+From VPN Setup 1.0.5 a Hetzner automatic setup reads the account's catalog in
+a `catalog` phase after the API key and SSH key, and again each time the
+settings are asked (**Change server settings**, other credentials), before
+the settings questions: read-only `GET`s through the same native `http` step
+as the checks, `/v1/server_types?per_page=50&page=N` and
+`/v1/locations?per_page=50&page=N` (following `meta.pagination.next_page` in
+order, four pages at most), then `/v1/pricing` for the prices' currency and
+the primary IPv4's price. Their step ids are
+`<deploymentId>-catalog-<list>-<page>`; a refresh sends the same ids again.
+The state keeps only a compact `catalog` (per x86 type its name, cores,
+memory and, per location where `server_types[].locations[]` says
+`available: true` with no `deprecation`, the monthly gross price and
+`recommended`; a type's own deprecated `deprecation` is not used, since
+Hetzner retires types per location; prices are decimal strings, the gross
+with 16 decimals; the locations that list one, with city and country) until the
+questions are answered. Location and server type are then asked as
+single-field `select`s: the native review shows a dropdown and the voice a
+choice, whose ids are Hetzner's own names, so the checks, the create request
+and deletion are unchanged. The suggestion is the cheapest orderable type and
+its location (Hetzner's `recommended` breaks equal prices); an earlier answer
+still listed stays selected. The selected option is always listed first (the
+voice maps a plain "yes" to the first choice), and labels are short, name and
+suggestion and price first, since the native dropdown cuts each to one line.
+Each list's last option, value `(other)`, asks the same field again as a typed
+`string` (default: the earlier answer or the usual one, or the suggestion when
+the catalog lists that type as not orderable in the chosen location), titled
+with what to say or type, which `settingProblem` and the read-only checks
+alone judge. A value typed after Other, or one other than the default where
+the catalog lists nothing, is kept in `custom` and offered, as `<value>
+(entered before)`, when the settings are asked again: selected, unless the
+catalog lists that type but not in the chosen location (`(entered before, not
+available here)`). Each question has a `message` that starts with its title,
+so the review no longer shows the label twice. Any refused, cut-off or unexpected catalog answer (HTTP 401, 403,
+429, 5xx, not a list, nothing orderable) ends the reads and leaves the
+questions typed as in 1.0.4: the catalog never pauses a setup, except for
+`CREDENTIAL_CHANGED` (other credentials entered for a read), which pauses
+with its usual reason; **Update cloud account credentials** then reads the
+catalog again with them. A network
+failure on one of its reads pauses the job natively, as any read does, and
+**Resume** sends it again. Jobs keep the bundle they started with, so a 1.0.4
+job continues with 1.0.4; a new operation started from a 1.0.5 setup drops
+`catalog`, `catalogRead`, `typing` and `custom`.
+
 The VPN Setup bundle implements ten provider adapters plus an existing-server
 path. Its fixtures validate transitions, recovery, deletion and installer
 contracts without paid cloud access. They do not establish that an account's

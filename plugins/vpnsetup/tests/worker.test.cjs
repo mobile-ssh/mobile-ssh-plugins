@@ -849,19 +849,24 @@ test('failures after resources exist, or outside the checks, keep the cloud reco
 
 test('a setting heard wrong is asked again and never brings back the cloud recovery',()=>{
   // The recorded run: cx23 sold out in fsn1, "Change server settings", and the location heard as "nbg 1".
+  // Its catalog read was refused (it is asked from the list otherwise), so the location is typed, as in 1.0.4.
   let current=soldOut();
   current=plain(worker.next(current.state,{type:'input',value:{action:'edit'}}));
-  assert.equal(current.step.title,'Location');
+  assert.equal(current.state.phase,'catalog');
+  current=result(current,{code:'CLOUD_HTTP_ERROR'},503);
+  const where='Where should the VPN server run?';
+  assert.equal(current.step.title,where);assert.equal(current.step.fields[0].label,'Location');assert.equal(current.step.fields[0].options,undefined);
   for(const [answer,reason] of [[{region:'nbg 1'},'Use only letters, digits, dots, underscores, colons and hyphens, with no spaces.'],
     [{region:'   '},'This setting is required.'],[{region:'nbg1;rm'},'Use only letters, digits, dots, underscores, colons and hyphens, with no spaces.']]){
     current=plain(worker.next(current.state,{type:'input',value:answer}));
-    assert.equal(current.state.phase,'options');assert.equal(current.step.form,'instance');assert.equal(current.step.title,'Location');
+    assert.equal(current.state.phase,'options');assert.equal(current.step.form,'instance');assert.equal(current.step.title,where);
     assert.equal(current.step.message,reason);assert.equal(current.step.error.message,reason);
     assert.equal(current.step.fields[0].default,'fsn1');assert.equal(current.state.inputs.region,'fsn1');
     assert.equal(current.state.interruptedPhase,'preflight');
   }
   current=plain(worker.next(current.state,{type:'input',value:{region:'nbg1'}}));
-  assert.equal(current.step.title,'Server type');assert.equal(current.step.message,undefined);assert.equal(current.step.error,undefined);
+  assert.equal(current.step.title,'Which server type should it use?');assert.equal(current.step.error,undefined);
+  assert.equal(current.step.message,'Which server type should it use? Enter an x86 Hetzner server type, such as cx23.');
   current=plain(worker.next(current.state,{type:'input',value:{}}));
   current=plain(worker.next(current.state,{type:'input',value:{sshCidr:'203.0.113.0/33'}}));
   assert.equal(current.step.fields[0].key,'sshCidr');assert.match(current.step.message,/IPv4 range/);
@@ -1712,4 +1717,422 @@ test('a delete of a setup on the user\'s own server with no host yet, or with no
     current=result(current,{});
     assert.equal(current.step.kind,'complete');assert.equal(current.state.phase,'deleted');
   }
+});
+
+// VPN Setup 1.0.5: Hetzner's settings are listed from the account's catalog, read with its API key before they are asked.
+// Synthetic answers in the documented shapes (GET /v1/server_types, /v1/locations, /v1/pricing); placeholder prices.
+const STEP_ID=/^[A-Za-z0-9._:/-]{1,160}$/;
+// Hetzner's format: the net with 10 decimals, the gross with 16 ("1.1900000000000000").
+const money=(net)=>({net:net.toFixed(10),gross:(Math.round(net*11900)/10000).toFixed(4)+'0'.repeat(12)});
+const priced=(locations,net)=>locations.map(location=>({location,price_hourly:money(net/700),price_monthly:money(net),included_traffic:21990232555520,price_per_tb_traffic:money(1)}));
+const at=(name,extra={})=>({id:{fsn1:1,nbg1:2,hel1:3,ash:4,hil:5,sin:6}[name]||9,name,deprecation:null,available:true,recommended:false,...extra});
+const pages=(key,lists)=>lists.map((list,i)=>({[key]:list,meta:{pagination:{page:i+1,per_page:50,previous_page:i?i:null,next_page:i+1<lists.length?i+2:null,last_page:lists.length,total_entries:lists.flat().length}}}));
+function hetznerCatalog() {
+  const type=(id,name,cores,memory,disk,net,locations,extra={})=>({id,name,description:name.toUpperCase(),cores,memory,disk,prices:priced(locations.map(l=>l.name),net),
+    storage_type:'local',cpu_type:extra.cpu_type||'shared',category:'Shared vCPU',architecture:extra.architecture||'x86',deprecation:extra.deprecation||null,locations});
+  const retired={announced:'2025-10-16T00:00:00Z',unavailable_after:'2026-01-01T00:00:00Z'};
+  return {
+    types:pages('server_types',[[
+      type(114,'cx23',2,4,40,3.19,[at('fsn1',{available:false}),at('nbg1',{recommended:true}),at('hel1')]),
+      type(45,'cax11',2,4,40,2.99,[at('fsn1'),at('nbg1'),at('hel1')],{architecture:'arm'}),
+      type(109,'cpx22',2,4,80,6.49,[at('fsn1'),at('nbg1'),at('hel1'),at('ash',{recommended:true})])
+    ],[
+      type(115,'cx33',4,8,80,5.49,[at('fsn1',{recommended:true}),at('nbg1')]),
+      type(104,'cx22',2,4,40,2.49,[at('fsn1',{available:false,deprecation:retired}),at('nbg1',{deprecation:retired})]),
+      type(96,'ccx13',2,8,80,12.49,[at('fsn1'),at('xyz9')],{cpu_type:'dedicated'}),
+      type(22,'cpx11',2,2,40,1.99,[at('fsn1',{available:false,deprecation:retired})],{deprecation:retired})
+    ]]),
+    locations:pages('locations',[[
+      {id:1,name:'fsn1',description:'Falkenstein DC Park 1',country:'DE',city:'Falkenstein',latitude:50.47612,longitude:12.370071,network_zone:'eu-central'},
+      {id:2,name:'nbg1',description:'Nuremberg DC Park 1',country:'DE',city:'Nuremberg',latitude:49.452102,longitude:11.076665,network_zone:'eu-central'},
+      {id:3,name:'hel1',description:'Helsinki DC Park 1',country:'FI',city:'Helsinki',latitude:60.169855,longitude:24.938379,network_zone:'eu-central'},
+      {id:4,name:'ash',description:'Ashburn, VA',country:'US',city:'Ashburn, VA',latitude:39.045,longitude:-77.487,network_zone:'us-east'},
+      {id:6,name:'sin',description:'Singapore',country:'SG',city:'Singapore',latitude:1.283,longitude:103.833,network_zone:'ap-southeast'}
+    ]]),
+    pricing:{pricing:{currency:'EUR',vat_rate:'19.00',primary_ips:[{type:'ipv4',prices:['fsn1','nbg1','hel1','ash'].map(location=>({location,price_hourly:money(0.001),price_monthly:money(0.5)}))},
+      {type:'ipv6',prices:[{location:'fsn1',price_hourly:money(0),price_monthly:money(0)}]}],server_types:[]}}
+  };
+}
+// A new Hetzner setup up to its catalog's first read.
+function toCatalog(id='catalog-test') {
+  let current=plain(worker.next({deploymentId:id,operation:'setup',inputs:{}},{type:'start'}));
+  current=plain(worker.next(current.state,{type:'input',value:{provider:'hetzner'}}));
+  current=plain(worker.next(current.state,{type:'input',value:{mode:'automatic'}}));
+  current=plain(worker.next(current.state,{type:'input',value:{credentialRef:'cloud-ref'}}));
+  return plain(worker.next(current.state,{type:'input',value:{credentialRef:'ssh-ref',publicKey:key}}));
+}
+// Answers each catalog read in turn; reads holds each answer or [status, body].
+function readCatalog(current,c=hetznerCatalog(),seen=[]) {
+  const queue=[...c.types,...c.locations,c.pricing];
+  while(current.state.phase==='catalog'){
+    const step=current.step;seen.push(step);
+    assert.equal(step.kind,'http');assert.equal(step.method,'GET');assert.match(step.id,STEP_ID);
+    assert.equal(step.auth.credentialRef,current.state.credentialRef);assert.equal(step.body,undefined);
+    const next=queue.shift();
+    current=Array.isArray(next)?result(current,next[1],next[0]):result(current,next);
+  }
+  return current;
+}
+const answer=(current,value)=>plain(worker.next(current.state,{type:'input',requestId:current.step.id,value}));
+const listed=step=>step.fields[0].options.map(o=>o.value);
+
+test('Hetzner reads its catalog after the API key and SSH key, before any setting, with read-only GETs only',()=>{
+  const seen=[];let current=toCatalog();
+  assert.equal(current.state.phase,'catalog');
+  current=readCatalog(current,hetznerCatalog(),seen);
+  assert.deepEqual(seen.map(s=>s.url),['https://api.hetzner.cloud/v1/server_types?per_page=50&page=1','https://api.hetzner.cloud/v1/server_types?per_page=50&page=2',
+    'https://api.hetzner.cloud/v1/locations?per_page=50&page=1','https://api.hetzner.cloud/v1/pricing']);
+  assert.deepEqual(seen.map(s=>s.id),['catalog-test-catalog-server_types-1','catalog-test-catalog-server_types-2','catalog-test-catalog-locations-1','catalog-test-catalog-pricing-1']);
+  assert.equal(new Set(seen.map(s=>s.id)).size,seen.length);
+  assert.ok(seen.every(s=>!s.reconcile&&!s.readOnly&&s.auth.scheme==='hetzner'));
+  // Compact: only what the lists and the suggestion need.
+  assert.deepEqual(current.state.catalog.locations,[['fsn1','Falkenstein, DE'],['nbg1','Nuremberg, DE'],['hel1','Helsinki, FI'],['ash','Ashburn, VA, US']]);
+  assert.deepEqual(current.state.catalog.types.map(t=>t.n),['cx23','cpx22','cx33','ccx13']);
+  assert.deepEqual(current.state.catalog.types[0],{n:'cx23',c:2,m:4,at:[['nbg1',3.7961,true],['hel1',3.7961,false]]});
+  assert.equal(current.state.catalog.currency,'EUR');assert.ok(JSON.stringify(current.state.catalog).length<1500);
+  assert.equal(current.state.catalogRead,undefined);
+});
+
+test('Hetzner asks the location from a list, then the server types orderable there, cheapest first, with Other last',()=>{
+  let current=readCatalog(toCatalog());
+  let step=current.step;
+  assert.equal(step.kind,'input');assert.equal(step.form,'instance');assert.equal(step.id,'catalog-test-options-0');
+  assert.equal(step.title,'Where should the VPN server run?');assert.equal(step.fields[0].label,'Location');assert.equal(step.fields[0].type,'select');
+  assert.equal(step.message,'Where should the VPN server run? These Hetzner locations can take a new server in your account now. For another one, choose Other.');
+  // sin lists no server type, so it is left out; the suggestion is where the cheapest type is, Hetzner's recommended one at equal prices.
+  // The selected one comes first (a voice "yes" takes the first choice), then Hetzner's order.
+  assert.deepEqual(step.fields[0].options,[{value:'nbg1',label:'nbg1 (suggested) · Nuremberg, DE'},{value:'fsn1',label:'fsn1 · Falkenstein, DE'},
+    {value:'hel1',label:'hel1 · Helsinki, FI'},{value:'ash',label:'ash · Ashburn, VA, US'},{value:'(other)',label:'Other (type a value)'}]);
+  assert.equal(step.fields[0].default,'nbg1');
+  current=answer(current,{region:'nbg1'});step=current.step;
+  assert.equal(step.id,'catalog-test-options-1');assert.equal(step.title,'Which server type should it use?');assert.equal(step.fields[0].label,'Server type');
+  // Short labels, what one chooses by first: the native list shows one line and cuts off the end.
+  assert.deepEqual(step.fields[0].options,[{value:'cx23',label:'cx23 (suggested) · 3.80 EUR/mo · 2 vCPU, 4 GB RAM'},
+    {value:'cx33',label:'cx33 · 6.53 EUR/mo · 4 vCPU, 8 GB RAM'},{value:'cpx22',label:'cpx22 · 7.72 EUR/mo · 2 vCPU, 4 GB RAM'},
+    {value:'(other)',label:'Other (type a value)'}]);
+  assert.ok(step.fields[0].options.every(o=>o.label.length<=50&&o.label.indexOf('EUR')<32),'name, suggestion and price fit one line');
+  assert.equal(step.fields[0].default,'cx23');
+  assert.equal(step.message,'Which server type should it use? These can be ordered in nbg1 now, cheapest first. A VPN needs little, so the suggested one is plenty. '+
+    'Prices are per month for the server alone; its public IPv4 address adds 0.60 EUR a month. For another one, choose Other.');
+  // fsn1 lists what can be ordered there now: not the sold-out cx23, the cx22 or cpx11 retired there, or the Arm cax11.
+  const there=answer(answer(readCatalog(toCatalog()),{region:'fsn1'}),{});
+  assert.equal(there.step.fields[0].key,'sshCidr');assert.equal(there.state.inputs.size,'cx33');
+  const fsn1=answer(readCatalog(toCatalog()),{region:'fsn1'}).step;
+  assert.deepEqual(listed(fsn1),['cx33','cpx22','ccx13','(other)']);assert.equal(fsn1.fields[0].default,'cx33');
+  const ash=answer(readCatalog(toCatalog()),{region:'ash'}).step;
+  assert.deepEqual(listed(ash),['cpx22','(other)']);
+});
+
+test('the listed answers flow unchanged into the read-only checks and the create request',()=>{
+  let current=readCatalog(toCatalog());
+  current=answer(current,{region:'hel1'});current=answer(current,{size:'cpx22'});
+  assert.equal(current.step.title,'Which addresses may connect over SSH?');assert.equal(current.step.fields[0].options,undefined);
+  current=answer(current,{sshCidr:'198.51.100.0/24'});
+  assert.equal(current.state.phase,'preflight');assert.equal(current.state.catalog,undefined);
+  assert.deepEqual(current.state.inputs,{region:'hel1',size:'cpx22',sshCidr:'198.51.100.0/24'});
+  assert.equal(current.step.url,'https://api.hetzner.cloud/v1/server_types?name=cpx22');
+  current=result(current,{server_types:[{name:'cpx22',architecture:'x86',locations:[{id:3,name:'hel1',available:true}]}]});
+  assert.equal(current.step.url,'https://api.hetzner.cloud/v1/locations?name=hel1');
+  current=result(current,{locations:[{id:3,name:'hel1'}]});
+  assert.equal(current.step.form,'confirm');assert.deepEqual(current.step.summary.settings,{region:'hel1',size:'cpx22',sshCidr:'198.51.100.0/24'});
+  const create=worker.graph(current.state).find(op=>op.key==='server').create.body;
+  assert.equal(create.server_type,'cpx22');assert.equal(create.location,'hel1');assert.equal(create.image,'ubuntu-24.04');
+  assert.equal(worker.graph(current.state).find(op=>op.key==='address').create.body.location,'hel1');
+});
+
+test('a voice answer is one of the listed values, and Other is one more choice followed by a typed question',()=>{
+  // As the app's voice offers a single-field select: each option's value as its choice id, its label as said.
+  const choose=(step,said)=>{const o=step.fields[0].options.find(x=>x.label.toLowerCase().includes(said));assert.ok(o,said);return {[step.fields[0].key]:o.value};};
+  let current=readCatalog(toCatalog());
+  assert.ok(current.step.fields[0].options.length<=26);
+  assert.ok(current.step.fields[0].options.every(o=>o.label.length<=80&&o.value.length<=40));
+  current=answer(current,choose(current.step,'helsinki'));assert.equal(current.state.inputs.region,'hel1');
+  current=answer(current,choose(current.step,'other'));
+  // The same setting, typed: the voice asks it as text with the earlier answer or the usual default.
+  assert.equal(current.step.id,'catalog-test-options-1');assert.equal(current.step.fields.length,1);
+  assert.deepEqual(current.step.fields[0],{key:'size',label:'Server type',type:'string',required:true,default:'cx23'});
+  // The voice says the title: after Other it asks for a name, not the same question again.
+  assert.equal(current.step.title,'Which server type? Type or say its name, such as cx23.');
+  assert.equal(current.step.message,'Which server type should it use? Enter an x86 Hetzner server type, such as cx23.');
+  assert.equal(current.state.inputs.size,undefined);assert.equal(current.state.typing,'size');
+  current=answer(current,{size:'ccx23'});
+  assert.equal(current.state.inputs.size,'ccx23');assert.deepEqual(current.state.custom,{size:'ccx23'});assert.equal(current.state.typing,undefined);
+  assert.equal(current.step.fields[0].key,'sshCidr');
+});
+
+test('a value typed after Other is not held to the lists: only the read-only checks judge it',()=>{
+  let current=readCatalog(toCatalog());
+  current=answer(current,{region:'(other)'});
+  assert.deepEqual(current.step.fields[0],{key:'region',label:'Location',type:'string',required:true,default:'fsn1'});
+  assert.equal(current.step.message,'Where should the VPN server run? Enter a Hetzner location name, such as fsn1, nbg1 or hel1.');
+  // A typed value cleanInputs would refuse is asked again, typed, with the reason.
+  current=answer(current,{region:'sin 1'});
+  assert.equal(current.step.fields[0].options,undefined);assert.match(current.step.message,/^Use only letters/);assert.equal(current.state.typing,'region');
+  current=answer(current,{region:'sin'});
+  // The catalog lists nothing to order in sin, so its server type is typed too, with the usual default.
+  assert.equal(current.step.fields[0].options,undefined);assert.equal(current.step.fields[0].default,'cx23');
+  current=answer(current,{size:'cax11'});current=answer(current,{});
+  assert.deepEqual(current.state.inputs,{region:'sin',size:'cax11',sshCidr:'0.0.0.0/0'});assert.deepEqual(current.state.custom,{region:'sin',size:'cax11'});
+  assert.equal(current.step.url,'https://api.hetzner.cloud/v1/server_types?name=cax11');
+  current=result(current,{server_types:[{name:'cax11',architecture:'arm',locations:[{id:1,name:'fsn1',available:true}]}]});
+  assert.equal(current.step.form,'recovery');assert.equal(current.state.error.message,'Server type cax11 is not an x86 type (it is arm). Choose an x86 server type.');
+  // Other in a listed location: a type the list leaves out (sold out there) is taken and checked.
+  let sold=answer(readCatalog(toCatalog()),{region:'fsn1'});
+  sold=answer(answer(answer(sold,{size:'(other)'}),{size:'cx23'}),{});
+  assert.equal(sold.state.inputs.size,'cx23');assert.equal(sold.step.url,'https://api.hetzner.cloud/v1/server_types?name=cx23');
+  // Other is never stored as a setting, nor taken where nothing is listed.
+  const typed=answer(answer(readCatalog(toCatalog(),{types:[[401,{code:'CLOUD_HTTP_ERROR'}]],locations:[],pricing:{}}),{}),{});
+  assert.equal(typed.state.inputs.region,'fsn1');
+  const refusedOther=plain(worker.next(Object.assign(state('hetzner'),{phase:'options',optionIndex:0}),{type:'input',value:{region:'(other)'}}));
+  assert.equal(refusedOther.state.phase,'options');assert.match(refusedOther.step.message,/^Use only letters/);
+});
+
+test('Change server settings reads the catalog again: earlier answers stay selected while orderable, a typed one is offered as entered before',()=>{
+  let current=readCatalog(toCatalog());
+  current=answer(current,{region:'nbg1'});current=answer(answer(current,{size:'(other)'}),{size:'cpx32'});current=answer(current,{});
+  // The check finds cpx32 sold out in nbg1.
+  current=result(current,{server_types:[{name:'cpx32',architecture:'x86',locations:[{id:2,name:'nbg1',available:false},{id:3,name:'hel1',available:true}]}]});
+  assert.equal(current.step.form,'recovery');assert.equal(current.step.fields[0].default,'edit');
+  current=answer(current,{action:'edit'});
+  assert.equal(current.state.phase,'catalog');assert.equal(current.state.catalog,undefined);assert.equal(current.step.id,'catalog-test-catalog-server_types-1');
+  // This time nbg1 has nothing but cpx22.
+  const c=hetznerCatalog();c.types[0].server_types[0].locations[1].available=false;c.types[1].server_types[0].locations[1].available=false;
+  current=readCatalog(current,c);
+  assert.equal(current.step.fields[0].default,'nbg1');
+  current=answer(current,{});
+  assert.deepEqual(current.step.fields[0].options.map(o=>[o.value,o.label]),[['cpx32','cpx32 (entered before)'],
+    ['cpx22','cpx22 (suggested) · 7.72 EUR/mo · 2 vCPU, 4 GB RAM'],['(other)','Other (type a value)']]);
+  assert.match(current.step.message,/now, your earlier answer first, then cheapest first\./);
+  assert.equal(current.step.fields[0].default,'cpx32');
+  // Kept without typing it again.
+  const kept=answer(answer(current,{}),{});
+  assert.equal(kept.state.inputs.size,'cpx32');assert.deepEqual(kept.state.custom,{size:'cpx32'});
+  // A listed answer forgets it.
+  const changed=answer(current,{size:'cpx22'});
+  assert.equal(changed.state.inputs.size,'cpx22');assert.equal(changed.state.custom,undefined);
+  // An earlier listed answer no longer orderable is not offered: the suggestion is selected instead.
+  let again=readCatalog(toCatalog());again=answer(answer(answer(again,{region:'nbg1'}),{size:'cx23'}),{});
+  again=result(again,{server_types:[{name:'cx23',architecture:'x86',locations:[{id:2,name:'nbg1',available:false}]}]});
+  again=readCatalog(answer(again,{action:'edit'}),c);
+  assert.equal(again.step.fields[0].default,'nbg1');again=answer(again,{});
+  assert.deepEqual(listed(again.step),['cpx22','(other)']);assert.equal(again.step.fields[0].default,'cpx22');
+  // A typed location the list holds is simply selected there.
+  let place=answer(answer(readCatalog(toCatalog()),{region:'(other)'}),{region:'hel1'});place=answer(answer(place,{}),{});
+  place=result(place,{server_types:[]});place=readCatalog(answer(place,{action:'edit'}));
+  assert.deepEqual(listed(place.step),['hel1','fsn1','nbg1','ash','(other)']);assert.equal(place.step.fields[0].default,'hel1');
+});
+
+test('other credentials read the catalog again before the settings, and a refresh sends the same step ids',()=>{
+  let current=readCatalog(toCatalog());
+  current=answer(answer(answer(current,{region:'hel1'}),{}),{});
+  current=result(current,{code:'CLOUD_HTTP_ERROR'},401);
+  assert.equal(current.step.fields[0].default,'account');
+  current=answer(answer(current,{action:'account'}),{credentialRef:'new-ref'});
+  // A failed check resumes at the checks with new credentials (every one again), as before.
+  assert.equal(current.state.phase,'preflight');assert.equal(current.step.auth.credentialRef,'new-ref');
+  // A cloud recovery whose setup stopped while asking the settings asks them again, from a new catalog.
+  const asking=Object.assign(state('hetzner'),{phase:'recovery',interruptedPhase:'options',error:{code:'workflow_failed',message:'Invalid region'},optionIndex:1,
+    catalog:{locations:[['fsn1','']],types:[{n:'cx23',at:[['fsn1',null,false]]}]}});
+  current=answer(plain(worker.next(asking,{type:'resume'})),{action:'account'});
+  assert.equal(current.step.form,'credential');
+  current=answer(current,{credentialRef:'other-ref'});
+  assert.equal(current.state.phase,'catalog');assert.equal(current.state.catalog,undefined);assert.equal(current.step.auth.credentialRef,'other-ref');
+  assert.equal(current.step.id,'test-deployment-123-catalog-server_types-1');
+});
+
+test('any failed or odd catalog answer leaves the settings typed, as in 1.0.4, and never pauses the setup',()=>{
+  const c=hetznerCatalog(),[types1,types2]=c.types,[places]=c.locations;
+  const odd=[
+    ['refused token',{types:[[401,{code:'CLOUD_HTTP_ERROR'}]]}],['forbidden',{types:[[403,{code:'CLOUD_HTTP_ERROR'}]]}],
+    ['rate limited',{types:[[429,{code:'CLOUD_HTTP_ERROR'}]]}],['server error',{types:[[503,{code:'CLOUD_HTTP_ERROR'}]]}],
+    ['second page refused',{types:[types1,[500,{code:'CLOUD_HTTP_ERROR'}]]}],['locations refused',{types:[types1,types2],locations:[[502,{}]]}],
+    ['not JSON',{types:['<html>maintenance</html>']}],['no list',{types:[{server_types:{cx23:{}}}]}],['empty',{types:[{server_types:[],meta:{pagination:{next_page:null}}}],locations:[places]}],
+    ['no locations',{types:[types1,types2],locations:[{locations:[]}]}],['redirect',{types:[[301,{}]]}],
+    ['all sold out',{types:[{server_types:types1.server_types.map(t=>Object.assign({},t,{locations:t.locations.map(l=>Object.assign({},l,{available:false}))}))}],locations:[places]}],
+    ['unknown places only',{types:[types1,types2],locations:[{locations:[{id:7,name:'zz1',city:'Nowhere',country:'ZZ'}]}]}],
+    ['malformed entries',{types:[{server_types:[null,7,'cx23',{name:'cx 23',architecture:'x86',locations:[at('fsn1')]},{name:'cx23',architecture:'x86',locations:'fsn1'}]}],locations:[places]}]
+  ];
+  for(const [name,reads] of odd){
+    let current=readCatalog(toCatalog(),Object.assign({types:[],locations:[],pricing:{}},reads));
+    assert.equal(current.state.phase,'options',name);assert.equal(current.state.catalog,undefined,name);assert.equal(current.state.error,undefined,name);
+    assert.deepEqual(current.step.fields,[{key:'region',label:'Location',type:'string',required:true,default:'fsn1'}],name);
+    assert.equal(current.step.message,'Where should the VPN server run? Enter a Hetzner location name, such as fsn1, nbg1 or hel1.',name);
+    current=answer(current,{});
+    assert.deepEqual(current.step.fields,[{key:'size',label:'Server type',type:'string',required:true,default:'cx23'}],name);
+  }
+  // The read cut off (an error event other than other credentials): typed.
+  const cut=plain(worker.next(toCatalog().state,{type:'error',code:'SSH_FAILED'}));
+  assert.equal(cut.state.phase,'options');assert.equal(cut.step.fields[0].type,'string');assert.equal(cut.state.error,undefined);
+  // A state whose catalog read is unreadable.
+  for(const catalogRead of [null,{at:0},{at:0,page:'1',types:[],places:[]},{at:'x',page:1,types:[],places:[]},{at:0,page:1,types:{},places:[]}]){
+    const broken=plain(worker.next(Object.assign(toCatalog().state,{catalogRead}),{type:'resume'}));
+    assert.equal(broken.state.phase,'options');assert.equal(broken.step.fields[0].type,'string');
+  }
+  // Prices refused: still listed, without prices, cheapest first all the same.
+  let unpriced=readCatalog(toCatalog(),{types:c.types,locations:c.locations,pricing:[503,{code:'CLOUD_HTTP_ERROR'}]});
+  unpriced=answer(unpriced,{});
+  assert.equal(unpriced.state.catalog.currency,undefined);
+  assert.equal(unpriced.step.fields[0].options[0].label,'cx23 (suggested) · 2 vCPU, 4 GB RAM');
+  assert.equal(unpriced.step.message,'Which server type should it use? These can be ordered in nbg1 now, cheapest first. A VPN needs little, so the suggested one is plenty. For another one, choose Other.');
+});
+
+test('catalog pages are followed in order up to four, and a page out of order ends that list',()=>{
+  const type=n=>({name:'cx'+n,architecture:'x86',cores:2,memory:4,disk:40,prices:priced(['fsn1'],n),locations:[at('fsn1')]});
+  const many=pages('server_types',[1,2,3,4,5,6].map(n=>[type(n+10)]));
+  const seen=[];
+  let current=readCatalog(toCatalog(),{types:many.slice(0,4),locations:hetznerCatalog().locations,pricing:{}},seen);
+  assert.deepEqual(seen.filter(s=>/server_types/.test(s.url)).map(s=>s.url.split('page=')[2]),['1','2','3','4']);
+  assert.deepEqual(current.state.catalog.types.map(t=>t.n),['cx11','cx12','cx13','cx14']);
+  const skipping=[{server_types:[type(11)],meta:{pagination:{page:1,next_page:3}}}];
+  current=readCatalog(toCatalog(),{types:skipping,locations:hetznerCatalog().locations,pricing:{}});
+  assert.deepEqual(current.state.catalog.types.map(t=>t.n),['cx11']);
+  // More orderable types than a voice list holds: the cheapest twelve, then Other.
+  const lots=pages('server_types',[Array.from({length:30},(_,i)=>type(40-i))]);
+  current=answer(readCatalog(toCatalog(),{types:lots,locations:hetznerCatalog().locations,pricing:{}}),{});
+  assert.equal(current.step.fields[0].options.length,13);assert.equal(current.step.fields[0].default,'cx11');
+});
+
+test('jobs from VPN Setup 1.0.4 keep working: a typed question answered, a recovery changing the settings, manual setups',()=>{
+  // A 1.0.4 state waiting on its typed Location question (no catalog): the answer is taken as typed.
+  const old=Object.assign(state('hetzner'),{phase:'options',optionIndex:0,inputs:{},pending:'test-deployment-123-options-0'});
+  let current=plain(worker.next(old,{type:'input',requestId:'test-deployment-123-options-0',value:{region:'nbg1'}}));
+  assert.equal(current.state.inputs.region,'nbg1');assert.equal(current.step.id,'test-deployment-123-options-1');
+  assert.equal(current.step.fields[0].type,'string');assert.equal(current.step.fields[0].default,'cx23');
+  current=answer(answer(current,{size:'cpx22'}),{});
+  assert.equal(current.state.phase,'preflight');assert.match(current.step.url,/name=cpx22$/);
+  // A 1.0.4 job stopped by the sold-out check: Change server settings reads the catalog, then lists from it.
+  current=soldOut();
+  assert.equal(current.state.catalog,undefined);
+  current=readCatalog(answer(current,{action:'edit'}));
+  assert.equal(current.step.fields[0].type,'select');assert.equal(current.step.fields[0].default,'fsn1');
+  current=answer(current,{});
+  assert.deepEqual(listed(current.step),['cx33','cpx22','ccx13','(other)']);assert.equal(current.step.fields[0].default,'cx33');
+  // A manual setup has no credentials: its questions are the console ones, as before.
+  let manual=plain(worker.next({deploymentId:'manual-test',operation:'setup',inputs:{}},{type:'start'}));
+  manual=answer(answer(answer(manual,{provider:'hetzner'}),{mode:'manual'}),{credentialRef:'ssh-ref',publicKey:key});
+  assert.equal(manual.state.phase,'manual');assert.equal(manual.state.catalogRead,undefined);
+  // Other providers ask as before, typed and titled by the label.
+  let other=plain(worker.next({deploymentId:'other-test',operation:'setup',inputs:{}},{type:'start'}));
+  other=answer(answer(answer(answer(other,{provider:'digitalocean'}),{mode:'automatic'}),{credentialRef:'cloud-ref'}),{credentialRef:'ssh-ref',publicKey:key});
+  assert.equal(other.state.phase,'options');assert.equal(other.step.title,'Region');assert.equal(other.step.message,undefined);
+  // A later operation starts without the setup's catalog, typed answers or progress through them.
+  const setup=Object.assign(state('hetzner'),{phase:'ready',host:'203.0.113.7',catalog:{locations:[],types:[]},catalogRead:{at:1},typing:'size',custom:{size:'cpx32'}});
+  const deleting=lifecycle('delete',setup);
+  for(const field of ['catalog','catalogRead','typing','custom'])assert.equal(deleting.state[field],undefined,field);
+  assert.equal(deleting.step.form,'confirm');
+});
+
+test('prices as Hetzner writes them (gross with 16 decimals) are shown, and the cheapest type and its location are suggested',()=>{
+  // Hetzner's own example: net "1.0000000000", gross "1.1900000000000000". Hetzner recommends the pricier cpx22 in ash only.
+  const p=(net,gross)=>({net,gross}),loc=(location,net,gross)=>({location,price_hourly:p('0.0010000000','0.0011900000000000'),price_monthly:p(net,gross)});
+  const types={server_types:[
+    {name:'cpx22',architecture:'x86',cores:2,memory:4,disk:80,deprecation:null,prices:[loc('ash','6.4900000000','7.7231000000000000'),loc('nbg1','6.4900000000','7.7231000000000000')],
+      locations:[at('ash',{recommended:true}),at('nbg1')]},
+    {name:'cx23',architecture:'x86',cores:2,memory:4,disk:40,deprecation:null,prices:[loc('nbg1','1.0000000000','1.1900000000000000')],locations:[at('nbg1')]},
+    {name:'ccx13',architecture:'x86',cores:2,memory:8,disk:80,deprecation:null,prices:[loc('nbg1','12.4900000000','14.8631000000000000')],locations:[at('nbg1',{recommended:true})]}],
+    meta:{pagination:{next_page:null}}};
+  const pricing={pricing:{currency:'EUR',primary_ips:[{type:'ipv4',prices:[{location:'nbg1',price_hourly:p('0.0008000000','0.0009520000000000'),price_monthly:p('0.5200000000','0.6188000000000000')}]}]}};
+  let current=readCatalog(toCatalog(),{types:[types],locations:hetznerCatalog().locations,pricing});
+  assert.deepEqual(current.state.catalog.types.find(t=>t.n==='cx23').at,[['nbg1',1.19,false]]);
+  assert.equal(current.step.fields[0].default,'nbg1');assert.equal(current.step.fields[0].options[0].label,'nbg1 (suggested) · Nuremberg, DE');
+  current=answer(current,{});
+  assert.equal(current.step.fields[0].default,'cx23');
+  assert.deepEqual(current.step.fields[0].options.map(o=>o.label),['cx23 (suggested) · 1.19 EUR/mo · 2 vCPU, 4 GB RAM','cpx22 · 7.72 EUR/mo · 2 vCPU, 4 GB RAM',
+    'ccx13 · 14.86 EUR/mo · 2 vCPU, 8 GB RAM','Other (type a value)']);
+  assert.match(current.step.message,/now, cheapest first\. .* its public IPv4 address adds 0\.62 EUR a month\./);
+  // Still bounded: no more than 20 decimals, no exponent.
+  const odd=JSON.parse(JSON.stringify(types));odd.server_types[1].prices[0].price_monthly.gross='1.'+'1'.repeat(21);odd.server_types[2].prices[0].price_monthly.gross='1e3';
+  const unpriced=readCatalog(toCatalog(),{types:[odd],locations:hetznerCatalog().locations,pricing});
+  assert.deepEqual(unpriced.state.catalog.types.map(t=>t.at[t.at.length-1][1]),[7.7231,null,null]);
+});
+
+test('a type whose own deprecation is set is listed where Hetzner still lists it as orderable, and not where it is retired',()=>{
+  const c=hetznerCatalog(),retired={announced:'2025-10-16T00:00:00Z',unavailable_after:'2026-01-01T00:00:00Z'};
+  c.types[1].server_types.push({name:'cx13',architecture:'x86',cores:1,memory:2,disk:20,deprecation:retired,prices:priced(['nbg1','hel1'],2.49),
+    locations:[at('nbg1'),at('hel1',{available:false,deprecation:retired})]});
+  let current=answer(readCatalog(toCatalog(),c),{region:'nbg1'});
+  assert.equal(current.step.fields[0].default,'cx13');assert.equal(current.step.fields[0].options[0].label,'cx13 (suggested) · 2.96 EUR/mo · 1 vCPU, 2 GB RAM');
+  current=answer(readCatalog(toCatalog(),c),{region:'hel1'});
+  assert.deepEqual(listed(current.step),['cx23','cpx22','(other)']);
+});
+
+test('the selected answer is the first choice, so a voice "yes" takes what the dialog preselects',()=>{
+  // The voice offers a select's options in order and maps a plain agreement to the first.
+  const first=step=>{assert.equal(step.fields[0].options[0].value,step.fields[0].default);return step;};
+  let current=readCatalog(toCatalog());
+  first(current.step);assert.equal(current.step.fields[0].default,'nbg1');
+  current=answer(current,{region:current.step.fields[0].options[0].value});
+  first(current.step);assert.equal(current.step.fields[0].default,'cx23');
+  // An earlier answer that is not the cheapest stays selected, and first, when the settings are asked again.
+  current=answer(answer(answer(current,{size:'cpx22'}),{}),{});
+  current=result(current,{server_types:[{name:'cpx22',architecture:'x86',locations:[{id:2,name:'nbg1',available:false}]}]});
+  current=readCatalog(answer(current,{action:'edit'}));
+  first(current.step);current=answer(current,{});
+  first(current.step);assert.equal(current.step.fields[0].default,'cpx22');
+  assert.deepEqual(listed(current.step),['cpx22','cx23','cx33','(other)']);
+  assert.match(current.step.message,/These can be ordered in nbg1 now, your earlier answer first, then cheapest first\./);
+  // After Other the voice asks for a name.
+  const other=answer(readCatalog(toCatalog()),{region:'(other)'});
+  assert.equal(other.step.title,'Which location? Type or say its Hetzner name, such as fsn1.');
+  assert.equal(other.step.message,'Where should the VPN server run? Enter a Hetzner location name, such as fsn1, nbg1 or hel1.');
+});
+
+test('a type the catalog lists as not orderable in the chosen location is not preselected again, typed or entered before',()=>{
+  // fsn1: cx23 sold out there. Other fills in the suggestion, not the usual cx23.
+  let current=answer(answer(readCatalog(toCatalog()),{region:'fsn1'}),{size:'(other)'});
+  assert.equal(current.step.fields[0].type,'string');assert.equal(current.step.fields[0].default,'cx33');
+  // Typed all the same, it is taken and checked; the check finds it sold out.
+  current=answer(answer(current,{size:'cx23'}),{});
+  assert.deepEqual(current.state.custom,{size:'cx23'});
+  current=result(current,{server_types:[{name:'cx23',architecture:'x86',locations:[{id:1,name:'fsn1',available:false},{id:2,name:'nbg1',available:true}]}]});
+  current=readCatalog(answer(current,{action:'edit'}));
+  assert.equal(current.step.fields[0].default,'fsn1');current=answer(current,{});
+  // Still offered (the user may know better), labelled, and not selected.
+  assert.deepEqual(current.step.fields[0].options.map(o=>[o.value,o.label]).slice(0,2),[['cx33','cx33 (suggested) · 6.53 EUR/mo · 4 vCPU, 8 GB RAM'],
+    ['cx23','cx23 (entered before, not available here)']]);
+  assert.equal(current.step.fields[0].default,'cx33');
+  const kept=answer(current,{size:'cx23'});assert.equal(kept.state.inputs.size,'cx23');assert.deepEqual(kept.state.custom,{size:'cx23'});
+  // In nbg1, where the catalog lists it, it is simply selected there.
+  const there=answer(current,{});assert.equal(there.state.inputs.size,'cx33');assert.equal(there.state.custom,undefined);
+  // A type the catalog does not know (cpx32, Arm cax11) stays selected: only the checks judge it.
+  let arm=answer(answer(answer(readCatalog(toCatalog()),{region:'fsn1'}),{size:'(other)'}),{size:'cax11'});arm=answer(arm,{});
+  arm=result(arm,{server_types:[{name:'cax11',architecture:'arm',locations:[{id:1,name:'fsn1',available:true}]}]});
+  arm=answer(readCatalog(answer(arm,{action:'edit'})),{});
+  assert.equal(arm.step.fields[0].default,'cax11');assert.equal(arm.step.fields[0].options[0].label,'cax11 (entered before)');
+});
+
+test('the usual server type left as it was, after a location the catalog lists nothing in, is not offered back as entered before',()=>{
+  let current=answer(answer(readCatalog(toCatalog()),{region:'(other)'}),{region:'fsn9'});
+  assert.equal(current.step.fields[0].type,'string');assert.equal(current.step.fields[0].default,'cx23');
+  current=answer(answer(current,{}),{});
+  assert.deepEqual(current.state.custom,{region:'fsn9'});assert.equal(current.state.inputs.size,'cx23');
+  current=result(current,{server_types:[{name:'cx23',architecture:'x86',locations:[{id:2,name:'nbg1',available:true}]}]});
+  current=readCatalog(answer(current,{action:'edit'}));
+  assert.equal(current.step.fields[0].default,'fsn9');assert.equal(current.step.fields[0].options[0].label,'fsn9 (entered before)');
+  current=answer(current,{region:'fsn1'});
+  // fsn1 sells no cx23 now: the suggestion is selected.
+  assert.deepEqual(listed(current.step),['cx33','cpx22','ccx13','(other)']);assert.equal(current.step.fields[0].default,'cx33');
+  // One typed there that differs from the default counts as entered before.
+  let typed=answer(answer(readCatalog(toCatalog()),{region:'(other)'}),{region:'fsn9'});typed=answer(typed,{size:'cpx32'});
+  assert.deepEqual(typed.state.custom,{region:'fsn9',size:'cpx32'});
+});
+
+test('other credentials entered during a catalog read pause at once with the reason, and the account choice reads it again with them',()=>{
+  const reading=toCatalog();
+  let current=plain(worker.next(reading.state,{type:'error',requestId:reading.step.id,code:'CREDENTIAL_CHANGED'}));
+  assert.equal(current.state.phase,'recovery');assert.equal(current.state.interruptedPhase,'catalog');
+  assert.match(current.step.message,/^Other cloud credentials were entered than the ones this step was prepared with/);
+  assert.ok(current.step.fields[0].options.some(o=>o.value==='account'));
+  // Checking again sends the same read (the app asks for the original credentials).
+  const again=answer(current,{action:'reconcile'});
+  assert.equal(again.state.phase,'catalog');assert.equal(again.step.id,reading.step.id);assert.equal(again.step.url,reading.step.url);
+  assert.equal(readCatalog(again).step.fields[0].type,'select');
+  // Update cloud account credentials: a new catalog read with them, then the lists.
+  current=answer(answer(current,{action:'account'}),{credentialRef:'other-ref'});
+  assert.equal(current.state.phase,'catalog');assert.equal(current.step.auth.credentialRef,'other-ref');assert.equal(current.step.id,'catalog-test-catalog-server_types-1');
+  current=readCatalog(current);
+  assert.equal(current.step.fields[0].type,'select');
+  // Change server settings reads it again too.
+  const edit=answer(plain(worker.next(reading.state,{type:'error',requestId:reading.step.id,code:'CREDENTIAL_CHANGED'})),{action:'edit'});
+  assert.equal(edit.state.phase,'catalog');assert.equal(edit.step.id,reading.step.id);
 });

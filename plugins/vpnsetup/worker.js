@@ -423,6 +423,129 @@
     ovh:[field('projectId','Public Cloud project ID'),field('endpoint','API account region','eu',{type:'select',options:['eu','ca','us'].map(value=>({value,label:value.toUpperCase()}))}),field('region','Cloud region','GRA11'),field('size','Flavor ID'),field('imageId','Ubuntu 24.04 image ID')],
     scaleway:[field('projectId','Project UUID'),field('zone','Zone','fr-par-1'),field('size','Commercial type','DEV1-S'),field('imageId','Ubuntu 24.04 image UUID')]
   };
+  const SSH_FIELD=field('sshCidr','Allow SSH from IPv4 CIDR','0.0.0.0/0');
+  // The settings questions as asked: [title, message when listed, message when typed, title when typed after Other]. The
+  // native review shows the message (else the title) above the field's label and the voice says the title, so neither repeats
+  // the label ("Location" twice before 1.0.5). The message starts with the title. After Other the voice says what to give,
+  // not the same question again (which sounded as if Other was not understood). Other providers keep the label as the title.
+  const QUESTIONS={hetzner:{
+    region:['Where should the VPN server run?','These Hetzner locations can take a new server in your account now.',
+      'Enter a Hetzner location name, such as fsn1, nbg1 or hel1.','Which location? Type or say its Hetzner name, such as fsn1.'],
+    size:['Which server type should it use?','These can be ordered in {where} now{order}. A VPN needs little, so the suggested one is plenty.',
+      'Enter an x86 Hetzner server type, such as cx23.','Which server type? Type or say its name, such as cx23.'],
+    sshCidr:['Which addresses may connect over SSH?','','Enter an IPv4 range in CIDR form. 0.0.0.0/0 allows any address; logins still need this setup\'s SSH key.']}};
+  // A listed question's last answer: the same setting asked again, typed (the host takes only listed values). The
+  // parentheses keep it from ever being a setting (settingProblem).
+  const OTHER='(other)',OTHER_LABEL='Other (type a value)',LISTED=12,LISTS=['region','size'];
+  // What a provider offers this account now, read with its API key before the settings questions: read-only GETs, at most
+  // CATALOG_PAGES pages each. reads: in order; list: where a read's array is ('' for one that is not a list); page: adds a
+  // read's answer to the catalog read so far. Only Hetzner so far: its server types, its locations, and the currency of the
+  // prices (with the public IPv4's price) from its pricing.
+  const CATALOG_PAGES=4,CATALOG={hetzner:{reads:['server_types','locations','pricing'],list:what=>what==='pricing'?'':what,
+    url:(what,page)=>'https://api.hetzner.cloud/v1/'+what+(what==='pricing'?'':'?per_page=50&page='+page),
+    next:b=>get(b,'meta.pagination.next_page'),page:hetznerPage}};
+  // A place's name as provider data may give it: letters, digits and simple punctuation, short.
+  const place=v=>typeof v==='string'&&/^[\p{L}\p{M}0-9 .,'()-]{1,40}$/u.test(v.trim())?v.trim():'';
+  // Hetzner writes prices as decimal strings, the gross with 16 decimals ("1.1900000000000000"), the net with 10.
+  const amount=v=>{const n=typeof v==='string'&&/^[0-9]{1,6}(\.[0-9]{1,20})?$/.test(v)?Number(v):typeof v==='number'?v:NaN;return Number.isFinite(n)&&n>=0&&n<1e6?n:null;};
+  const count=v=>typeof v==='number'&&Number.isFinite(v)&&v>0&&v<100000?v:null;
+  // One answer into the compact catalog the job's state keeps: per type its name, cores, memory (GB) and, per location it
+  // can be ordered in now (available, not being retired there), [location, monthly gross price or null, recommended there].
+  // Only x86 types: the read-only checks refuse others (Automatic VM choices target amd64). A type's own deprecation is
+  // not used: Hetzner retires types per location, and that field may stay set where one can still be ordered.
+  function hetznerPage(r,what,values,b) {
+    if(what==='server_types')for(const x of items(values)){
+      if(!safe(x.name)||x.architecture!=='x86'||r.types.some(t=>t.n===x.name))continue;
+      const at=items(x.locations).filter(l=>safe(l.name)&&l.available===true&&!l.deprecation).map(l=>
+        [l.name,amount(get(items(x.prices).find(p=>p.location===l.name),'price_monthly.gross')),l.recommended===true]);
+      if(at.length)r.types.push({n:x.name,c:count(x.cores),m:count(x.memory),at});
+    }
+    else if(what==='locations')for(const x of items(values)){
+      if(!safe(x.name)||r.places.some(p=>p[0]===x.name))continue;
+      const country=typeof x.country==='string'&&/^[A-Z]{2}$/.test(x.country)?x.country:'';
+      r.places.push([x.name,[place(x.city),country].filter(Boolean).join(', ')]);
+    }
+    else {
+      const currency=get(b,'pricing.currency'),ipv4=items(get(b,'pricing.primary_ips')).find(x=>x.type==='ipv4');
+      if(typeof currency==='string'&&/^[A-Z]{3}$/.test(currency))r.currency=currency;
+      r.ipv4=items(ipv4&&ipv4.prices).map(p=>[safe(p.location),amount(get(p,'price_monthly.gross'))]).filter(p=>p[0]&&p[1]!==null);
+    }
+  }
+  // Every order the catalog allows now: a type in a listed location, cheapest first; at the same price, where the provider
+  // recommends that type, then the smaller type. The first is the suggestion. Equal ones keep the provider's order.
+  const price=x=>x.price===null?Infinity:x.price;
+  const offers=c=>c.types.flatMap(t=>t.at.map(([loc,cost,rec])=>({t,loc,price:cost,rec}))).filter(x=>c.locations.some(p=>p[0]===x.loc));
+  const cheaper=(a,b)=>((price(a)-price(b))||0)||(b.rec-a.rec)||((a.t.c||0)-(b.t.c||0))||((a.t.m||0)-(b.t.m||0));
+  // Half a cent up, as a price list shows it: 0.595 is 0.59499.. in binary and toFixed alone says 0.59.
+  const money=(value,currency)=>(Math.round(value*100+1e-6)/100).toFixed(2)+' '+currency;
+  // Short, what one chooses by first: the native list shows one line and cuts the end ("40 GB di.."), so the name, whether
+  // it is the suggestion, the price, then cores and memory; disk sizes are on the pricing page.
+  const sizeLabel=(x,currency,first)=>[x.t.n+(first?' (suggested)':''),x.price!==null&&currency?money(x.price,currency)+'/mo':'',
+    [x.t.c&&x.t.c+' vCPU',x.t.m&&x.t.m+' GB RAM'].filter(Boolean).join(', ')].filter(Boolean).join(' · ');
+  // A listed question's answers and the one selected: the earlier answer while it is listed; else a value typed before while
+  // the catalog listed (custom), offered as entered before and selected, unless the catalog knows that type cannot be
+  // ordered in this location (it would stop on the same check again); else the suggestion. The selected one comes first,
+  // since a voice "yes" takes the first choice, and Other last. null when the catalog lists nothing for it (server types in
+  // a location typed after Other, say), which leaves the question typed as before. away: a type the catalog knows but not here.
+  function choices(s,key) {
+    const c=s.catalog,all=c&&Array.isArray(c.types)&&Array.isArray(c.locations)?offers(c).sort(cheaper):[];
+    let full,suggested,sorted=false;
+    if(key==='region'){
+      if(!all.length)return null;
+      suggested=all[0].loc;
+      full=c.locations.filter(p=>all.some(x=>x.loc===p[0])).map(([value,label])=>({value,label:[value+(value===suggested?' (suggested)':''),label].filter(Boolean).join(' · ')}));
+    }
+    else if(key==='size'){
+      const here=all.filter(x=>x.loc===s.inputs.region);
+      if(!here.length)return null;
+      suggested=here[0].t.n;sorted=here.some(x=>x.price!==null);
+      full=here.map(x=>({value:x.t.n,label:sizeLabel(x,c.currency,x===here[0])}));
+    }
+    else return null;
+    const away=v=>key==='size'&&!full.some(o=>o.value===v)&&c.types.some(t=>t.n===v);
+    const previous=s.inputs[key],custom=get(s,'custom.'+key),kept=full.some(o=>o.value===previous);
+    const before=!kept&&!!custom&&custom===previous?[{value:custom,label:custom+(away(custom)?' (entered before, not available here)':' (entered before)')}]:[];
+    const chosen=kept||before.length&&!away(custom)?previous:suggested;
+    const offered=before.concat(full.filter((o,at)=>at<LISTED||o.value===previous||o.value===suggested));
+    return {default:chosen,suggested,away,sorted,earlier:chosen!==suggested,priced:sorted&&!!c.currency,
+      options:offered.filter(o=>o.value===chosen).concat(offered.filter(o=>o.value!==chosen),[{value:OTHER,label:OTHER_LABEL}])};
+  }
+  // The settings question at optionIndex, as asked: listed from the catalog when it lists answers for it (unless Other was
+  // chosen there: typing), else typed with the earlier answer or the usual default. After Other, a type the catalog knows
+  // cannot be ordered in this location is not filled in again (cx23 where it is sold out): the suggestion is.
+  function optionField(s) {
+    const f=[...OPTIONS[s.provider],SSH_FIELD][s.optionIndex||0],listed=s.catalog&&choices(s,f.key),typed=s.inputs[f.key]||f.default;
+    if(listed&&s.typing!==f.key)return Object.assign({},f,{type:'select',default:listed.default,options:listed.options});
+    return Object.assign({},f,typed?{default:listed&&listed.away(typed)?listed.suggested:typed}:{});
+  }
+  // Where the settings questions start, every time they are asked: an automatic setup with a provider catalog reads it
+  // again first, so what is sold out is current (also after Change server settings or other credentials).
+  function ask(s) {
+    s.optionIndex=0;for(const key of ['optionProblem','catalog','catalogRead','typing'])delete s[key];
+    if(s.mode==='automatic'&&CATALOG[s.provider]&&s.credentialRef){s.catalogRead={at:0,page:1,types:[],places:[]};s.phase='catalog';}
+    else s.phase='options';
+  }
+  // The catalog read ends: kept when it lists something to order, else (any refused, failed or odd answer) the questions
+  // are typed as before, and the read-only checks still say what is wrong. It never stops the setup.
+  function catalogDone(s,failed) {
+    const r=s.catalogRead;delete s.catalogRead;delete s.catalog;
+    if(!failed&&r&&Array.isArray(r.types)&&Array.isArray(r.places)){
+      const listed=r.places.filter(p=>r.types.some(t=>t.at.some(a=>a[0]===p[0]))),ipv4=(r.ipv4||[]).filter(p=>listed.some(l=>l[0]===p[0]));
+      if(listed.length)s.catalog=Object.assign({locations:listed,types:r.types},r.currency?{currency:r.currency}:{},r.currency&&ipv4.length?{ipv4}:{});
+    }
+    s.phase='options';s.optionIndex=0;return render(s);
+  }
+  // The question's explanation, which the native review shows under its title: the question itself, what is listed or what
+  // to type, prices, and how to give another answer.
+  function optionMessage(s,current) {
+    const asked=(QUESTIONS[s.provider]||{})[current.key],listed=!!current.options&&!!s.catalog;
+    if(!asked)return '';
+    if(!listed)return asked[0]+' '+asked[2];
+    const how=current.key==='size'?choices(s,'size'):{},c=s.catalog,ip=how.priced&&(c.ipv4||[]).find(p=>p[0]===s.inputs.region);
+    return asked[0]+' '+asked[1].replace('{where}',shown(s.inputs.region)).replace('{order}',how.sorted?(how.earlier?', your earlier answer first, then cheapest first':', cheapest first'):'')+
+      (how.priced?' Prices are per month for the server alone; its public IPv4 address '+(ip?'adds '+money(ip[1],c.currency)+' a month.':'costs a little extra.'):'')+
+      ' For another one, choose Other.';
+  }
 
   function output(s, step) { s.pending = step ? step.id : null; return {state:s,step:step || {kind:'complete',id:s.deploymentId+'-done',result:{deploymentId:s.deploymentId,status:s.phase}}}; }
   function input(s, form, title, fields, more) {
@@ -693,11 +816,18 @@
       field('mode','Setup method','automatic',{type:'select',options:[{value:'automatic',label:'Create with cloud API'},{value:'manual',label:'Create in cloud console'}]})]);
     if(s.phase==='credential')return input(s,'credential','Connect '+PROVIDERS[s.provider][0],CREDENTIALS[s.provider],{provider:s.provider,persistent:true,guide:'guides/'+s.provider+'.md'});
     if(s.phase==='sshKey')return input(s,'sshKey','Select or create the server SSH key',[],{provider:s.provider,algorithm:s.provider==='aws'?'rsa':'ed25519',guide:'guides/'+s.provider+'.md'});
+    // The catalog's reads, one page at a time, each under its own step id (a refresh sends them again under the same ids).
+    if(s.phase==='catalog'){
+      const r=s.catalogRead,from=CATALOG[s.provider],what=r&&from&&from.reads[r.at];
+      if(!from||!r||!Number.isSafeInteger(r.at)||!Number.isSafeInteger(r.page)||!Array.isArray(r.types)||!Array.isArray(r.places))return catalogDone(s,true);
+      if(!what)return catalogDone(s);
+      return output(s,Object.assign({kind:'http',id:s.deploymentId+'-catalog-'+what+'-'+r.page},request(s,'GET',from.url(what,r.page))));
+    }
     if(s.phase==='options'){
-      const fields=[...OPTIONS[s.provider],field('sshCidr','Allow SSH from IPv4 CIDR','0.0.0.0/0')],current=fields[s.optionIndex||0];
+      const current=optionField(s),asked=(QUESTIONS[s.provider]||{})[current.key],message=optionMessage(s,current);
       // Asked again after an answer it could not use: why, as the native review's message and the page's problem.
       const refused=s.optionProblem?{message:s.optionProblem,error:{code:'invalid_setting',message:s.optionProblem}}:{};
-      return input(s,'instance',current.label,[Object.assign({},current,s.inputs[current.key]?{default:s.inputs[current.key]}:{})],Object.assign({id:s.deploymentId+'-options-'+(s.optionIndex||0),guide:'guides/'+s.provider+'.md',pricingUrl:PROVIDERS[s.provider][1]},refused));
+      return input(s,'instance',asked?(s.typing===current.key&&asked[3])||asked[0]:current.label,[current],Object.assign({id:s.deploymentId+'-options-'+(s.optionIndex||0),guide:'guides/'+s.provider+'.md',pricingUrl:PROVIDERS[s.provider][1]},message?{message}:{},refused));
     }
     if(s.phase==='manual')return input(s,'instance','Create Ubuntu 24.04 using the console guide',[
       field('host','Public IPv4 address')],{guide:'guides/'+s.provider+'.md',publicKey:s.publicKey});
@@ -809,7 +939,7 @@
         s=Object.assign(clone(prior),{operation,targetClientId:get(snapshot,'inputs.clientId'),pending:null,error:null});
         // The snapshot is the deployment's latest job, which may have stopped part-way, such as a delete stopped after
         // its server went: its receipts carry over, its progress does not (a stale creationAbsent offered recreation).
-        for(const key of ['interruptedPhase','suspendedPhase','httpStage','extraCleanup','creationAbsent','creationSent','allowRecreate','checkStatus','optionProblem','accountResumePhase','verifyKey','verifyStage','dropletCheck','dropletSeen','finding','findMoved','sameAccountAsked'])delete s[key];
+        for(const key of ['interruptedPhase','suspendedPhase','httpStage','extraCleanup','creationAbsent','creationSent','allowRecreate','checkStatus','optionProblem','accountResumePhase','verifyKey','verifyStage','dropletCheck','dropletSeen','finding','findMoved','sameAccountAsked','catalog','catalogRead','typing','custom'])delete s[key];
       }
       s.version=1;s.operation=operation;s.deploymentId=s.deploymentId||get(snapshot,'inputs.deploymentId');
       if(!/^[a-zA-Z0-9_-]{1,64}$/.test(s.deploymentId||''))throw new Error('Native runner must supply a stable deploymentId');
@@ -824,6 +954,10 @@
     }
     if(event.requestId&&event.requestId!==s.pending)throw new Error('Stale workflow response');
     if(event.type==='cancel'){s.suspendedPhase=s.phase;s.phase='cancelled';return output(s);}
+    // A catalog read that could not finish leaves the questions typed, as a refused one does.
+    // Other credentials entered for it are not: that pause says so at once, and its Update cloud account credentials reads
+    // the catalog again with them.
+    if(event.type==='error'&&s.phase==='catalog'&&event.code!=='CREDENTIAL_CHANGED')return catalogDone(s,true);
     if(event.type==='error'){
       const failure=s.phase==='update'&&UPDATE_FAILURES[event.code];
       if(event.code==='UPDATE_RESTORE_FAILED'&&failure)delete s.health; // Its version line would describe a VPN that is down.
@@ -837,17 +971,25 @@
         const v=event.value||{};
         if(s.phase==='provider'){if(!PROVIDERS[v.provider])throw new Error('Choose a supported provider');s.provider=v.provider;s.user=PROVIDERS[s.provider][2];s.phase=s.provider==='existing'?'sshKey':'mode';if(s.provider==='existing')s.mode='manual';}
         else if(s.phase==='mode'){s.mode=v.mode==='manual'?'manual':'automatic';s.phase=s.mode==='manual'?'sshKey':'credential';}
-        else if(s.phase==='credential'){if(typeof v.credentialRef!=='string')throw new Error('A native credential reference is required');s.credentialRef=v.credentialRef;s.phase=s.accountResumePhase||(s.sshCredentialRef?'options':'sshKey');if(s.accountResumePhase==='provision')s.httpStage='reconcile';delete s.accountResumePhase;s.optionIndex=0;}
-        else if(s.phase==='sshKey'){if(typeof v.credentialRef!=='string'||!/^ssh-(ed25519|rsa) [A-Za-z0-9+/=]+(?: .*)?$/.test(v.publicKey||'')||(s.provider==='aws'&&!v.publicKey.startsWith('ssh-rsa ')))throw new Error('Select a valid SSH key (RSA for Lightsail)');s.sshCredentialRef=v.credentialRef;s.publicKey=v.publicKey.split(/\s+/).slice(0,2).join(' ');s.phase=s.mode==='manual'?'manual':'options';}
+        else if(s.phase==='credential'){if(typeof v.credentialRef!=='string')throw new Error('A native credential reference is required');s.credentialRef=v.credentialRef;s.phase=s.accountResumePhase||(s.sshCredentialRef?'options':'sshKey');if(s.accountResumePhase==='provision')s.httpStage='reconcile';delete s.accountResumePhase;s.optionIndex=0;if(['options','catalog'].includes(s.phase))ask(s);}
+        else if(s.phase==='sshKey'){if(typeof v.credentialRef!=='string'||!/^ssh-(ed25519|rsa) [A-Za-z0-9+/=]+(?: .*)?$/.test(v.publicKey||'')||(s.provider==='aws'&&!v.publicKey.startsWith('ssh-rsa ')))throw new Error('Select a valid SSH key (RSA for Lightsail)');s.sshCredentialRef=v.credentialRef;s.publicKey=v.publicKey.split(/\s+/).slice(0,2).join(' ');if(s.mode==='manual')s.phase='manual';else ask(s);}
         else if(s.phase==='options'){
-          const fields=[...OPTIONS[s.provider],field('sshCidr','Allow SSH from IPv4 CIDR','0.0.0.0/0')],f=fields[s.optionIndex||0];
-          const value=String((v[f.key]===undefined?s.inputs[f.key]||f.default:v[f.key])||'').trim();
+          const f=optionField(s),value=String((v[f.key]===undefined?f.default:v[f.key])||'').trim();
+          // Other asks the same setting again, typed: any value the checks then judge, as before the lists.
+          if(f.options&&value===OTHER&&s.catalog){s.typing=f.key;delete s.optionProblem;return render(s);}
           // A setting the last answer's cleanInputs would refuse is asked again now: "nbg 1" heard by voice used to
           // stop the setup on "Invalid region", whose recovery asked only the last setting and failed the same way.
-          const problem=settingProblem(f,value);
+          // A listed question takes only what it lists (the native review and the voice offer nothing else).
+          const problem=settingProblem(f,value)||(f.options&&!f.options.some(o=>o.value===value)?'Choose one of the listed answers.':'');
           if(problem){s.optionProblem=problem;return render(s);}
           delete s.optionProblem;s.inputs[f.key]=value;
-          if((s.optionIndex||0)+1===fields.length){s.inputs=cleanInputs(s.provider,s.inputs);s.preflightIndex=0;s.verified=[];s.phase='preflight';}
+          // A value typed while the catalog lists (after Other, or other than the default for a location it lists nothing in) is
+          // offered again, as entered before, when the settings are asked again; another answer forgets it. Typed with no catalog,
+          // or the default left as it was, it is only the earlier answer (an untouched cx23 is no choice to offer back).
+          if(!f.options&&s.catalog&&LISTS.includes(f.key)&&(s.typing===f.key||value!==f.default))s.custom=Object.assign(s.custom||{},{[f.key]:value});
+          else if(s.custom&&s.custom[f.key]!==value){delete s.custom[f.key];if(!Object.keys(s.custom).length)delete s.custom;}
+          delete s.typing;
+          if((s.optionIndex||0)+1===OPTIONS[s.provider].length+1){s.inputs=cleanInputs(s.provider,s.inputs);delete s.catalog;s.preflightIndex=0;s.verified=[];s.phase='preflight';}
           else s.optionIndex=(s.optionIndex||0)+1;
         }
         else if(s.phase==='manual'){if(!/^\d{1,3}(\.\d{1,3}){3}$/.test(v.host||''))throw new Error('Enter public IPv4');s.host=v.host;s.phase='manualUser';}
@@ -874,7 +1016,7 @@
           if(s.operation==='update'){s.phase=v.action==='retry'?'update':'health';return render(s);}
           if(unchecked(s)){
             // Change re-asks every setting with its current value filled in; checking again repeats the failed check.
-            if(v.action==='edit'){s.optionIndex=0;s.phase='options';}
+            if(v.action==='edit')ask(s);
             else if(v.action==='retry')s.phase='preflight';
             // Other credentials may reach another account or project: every check runs again with them.
             else if(v.action==='account'&&s.mode==='automatic'&&CREDENTIALS[s.provider]){s.accountResumePhase='preflight';s.preflightIndex=0;s.verified=[];s.phase='credential';}
@@ -888,7 +1030,7 @@
             if(Object.values(s.resources).some(x=>x.status!=='deleted'))throw new Error('Clean up created resources before changing their cloud settings');
             // Its create would go out again under the same step id, and nothing would ever look up what the first one made.
             if(unsettled(s).length)throw new Error('Check current cloud state first: a creation that got no answer may have made a resource');
-            s.optionIndex=0;s.phase=s.mode==='manual'?'manual':OPTIONS[s.provider]?'options':'provider';return render(s);
+            s.optionIndex=0;s.phase=s.mode==='manual'?'manual':OPTIONS[s.provider]?'options':'provider';if(s.phase==='options')ask(s);return render(s);
           }
           if(v.action==='account'){s.accountResumePhase=s.interruptedPhase||'options';s.phase='credential';return render(s);}
           // The user says these credentials reach the account its resources went to, and confirms it when asked again: what they
@@ -907,6 +1049,16 @@
       if(s.phase==='cleanupWait'){s.phase='cleanup';if(!['deleteCheck','deleteRetry'].includes(s.httpStage))s.httpStage='deleteRead';return render(s);}
       if(s.phase==='extraWait'){s.phase='cleanupExtra';s.httpStage='deleteRead';return render(s);}
       const b=body(event),status=get(event,'result.status',200);
+      if(s.phase==='catalog') {
+        const r=s.catalogRead,from=CATALOG[s.provider],what=r&&from&&from.reads[r.at],path=what&&from.list(what),values=path?get(b,path):[];
+        // A list refused, or not a list, leaves the questions typed. Prices may be missing: the lists then show none.
+        if(!what||(path&&(status<200||status>=300||!Array.isArray(values))))return catalogDone(s,true);
+        if(status>=200&&status<300&&b&&typeof b==='object')try{from.page(r,what,values,b);}catch(_){return catalogDone(s,true);}
+        // Further pages only in order and up to the cap; what the first pages list is enough to choose from.
+        const following=path&&from.next(b);
+        if(following===r.page+1&&r.page<CATALOG_PAGES)r.page=following;else{r.at++;r.page=1;}
+        return render(s);
+      }
       if(s.phase==='preflight') {
         const check=preflight(s)[s.preflightIndex||0];
         if(status<200||status>=300){s.checkStatus=status;return pause(s,check.label+' could not be verified ('+providerError(status,b)+'). Check account permissions, region, plan and Ubuntu 24.04 image.');}
