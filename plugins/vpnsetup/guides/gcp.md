@@ -15,6 +15,17 @@ VPC, firewalls, address and VM. If organization policy enforces OS Login or
 prohibits service-account keys/external IPs, use an administrator-approved
 console configuration and the console path instead.
 
+Optionally also enable the **Cloud Resource Manager API** in the key's
+project: the plugin can then list your projects to choose from; without it,
+enter the project ID yourself. It then lists the project's regions and the
+chosen region's zones that are up, and the x86 machine types offered in that
+zone with at least 1 GB RAM. Google Cloud's API gives the plugin no prices, so
+they are shown without one, in list-price order: `e2-micro` (the smallest, in
+the free tier for one VM in us-west1, us-central1 and us-east1) is suggested;
+`e2-small` gives more headroom. Choose **Other (type a value)** to enter
+another value. The zone must be in the chosen region; the checks refuse one
+that is not, and an Arm machine type, since the server boots Ubuntu for amd64.
+
 For console setup:
 
 1. Create a VPC/subnet in the chosen region, with internet routing.

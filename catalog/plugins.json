@@ -46,7 +46,7 @@
       "id": "io.github.mobilessh.vpnsetup",
       "name": "VPN Setup",
       "description": "Create a cloud WireGuard VPN, register it in Mobile SSH, and manage its clients and cloud resources with a guided, resumable workflow.",
-      "version": "1.0.5",
+      "version": "1.0.6",
       "minBridgeVersion": "1.3.0",
       "role": "connectivity",
       "icon": "plugins/vpnsetup/icon.svg",
@@ -63,19 +63,19 @@
       "files": [
         {
           "path": "README.md",
-          "sha256": "c7f4b84990fee9518deb649c1ea7b7c3d7c1a971fed3b827ffdc02db10a5e8e3"
+          "sha256": "e9a235d24608c84d9a56edc28e166caac5b93d1fa28e4a652a3a78e4c2cf33dd"
         },
         {
           "path": "guides/aws.md",
-          "sha256": "37526d1b7941d9eddb7aab0ec8e1360239879d9cdc90b2493d57ff4913787e9e"
+          "sha256": "5f7382ee9238b188255869022500dccca19013529906d58c56910f272dcc344a"
         },
         {
           "path": "guides/azure.md",
-          "sha256": "281b98b48bade8b4f420b99bd68482ef7b45682a44ea6110551967f89c74dc4f"
+          "sha256": "ca902233c677ecb67891e6b9e67a16d1e2fdd22cbe9f7a1aad00677ed8c414b0"
         },
         {
           "path": "guides/digitalocean.md",
-          "sha256": "0d7f8a35d78fe90cf4f715ce9d1219a25393bc24defadbb2c2d3a1552199a64d"
+          "sha256": "9f520cd897fe94a9f0e6c125fdc9d754f07161288d96ee2cd604795467c449bc"
         },
         {
           "path": "guides/existing.md",
@@ -83,7 +83,7 @@
         },
         {
           "path": "guides/gcp.md",
-          "sha256": "66fe413e2ffe3b3a3ef9abbbebfa73c34a5b5477035c3c61ea275c52c25d44c6"
+          "sha256": "9ffa05d4c4986a9408e48a7efc46264ec8e4e24ce73657d0456f0f5532ae9cf1"
         },
         {
           "path": "guides/hetzner.md",
@@ -91,23 +91,23 @@
         },
         {
           "path": "guides/linode.md",
-          "sha256": "9296e13faf2d504b3764ab725c0e71279fa48beb3ade0413bf913e0e91ed56bd"
+          "sha256": "60d4e8a0508306e197d91800dc0b7b8f8db744fa187a7dc1484acbdd41f2cddd"
         },
         {
           "path": "guides/oci.md",
-          "sha256": "5a969feb2ae40a295d5e38b08e49110219ebbb966c0a8b44e43186173db4d017"
+          "sha256": "0ad262107e0ed84c880d92c8676b8f78ca2465dbabab4234264328f00def22ec"
         },
         {
           "path": "guides/ovh.md",
-          "sha256": "6f03159956e7136f582156a71ff75b7bed7b5a938e2e5f5a97d26371bc946886"
+          "sha256": "6d8989d2cae220734028e33f7659378afbf77c27d10c89896e012c34f919fdb1"
         },
         {
           "path": "guides/scaleway.md",
-          "sha256": "2d674e1ecbb679270c10d0b2c3a186cc5c0f84ac236aef213da00c6c885819c0"
+          "sha256": "01e8cbc9f967d09cc1fc30f5b32823008a5f5ac9f0cb597cce2014f57f0565c3"
         },
         {
           "path": "guides/vultr.md",
-          "sha256": "abe216468d546114494ab5eb5ac8dbaa2fe902f5f8e4d104969ee610ebffa196"
+          "sha256": "5e661e48eadffdde39db72dff4e65558c2162dae7c268bde60957ab28cbb813d"
         },
         {
           "path": "icon.svg",
@@ -115,11 +115,47 @@
         },
         {
           "path": "manifest.json",
-          "sha256": "1cbfe048f28f8c17f2c3415f033ed7321511a62f67212ddbb1087e861720e895"
+          "sha256": "b16ee60bc130e350cb92d65169ec24099d7377a7d3014ef1d8e06aa9ef666f8f"
         },
         {
           "path": "server/vpn.py",
           "sha256": "95031d57828c426bd13db835af6f1dc852852389a796bcd59e21dde795e61216"
+        },
+        {
+          "path": "tests/fixtures/aws.json",
+          "sha256": "b80760e639ce27f86911e25afe39b4a467700b3061682be99c9d07c09fbafe9a"
+        },
+        {
+          "path": "tests/fixtures/azure.json",
+          "sha256": "9a022533aa060dceec850fa65270b641d7e2f0044d1f98ab44146b3a0bca69ba"
+        },
+        {
+          "path": "tests/fixtures/digitalocean.json",
+          "sha256": "80ba35363d904053aabe4889f4a712196c491cecc093d23dd148d9da8e252de5"
+        },
+        {
+          "path": "tests/fixtures/gcp.json",
+          "sha256": "ae70375ccb05e36fd1acd3be4ada1ae138c280eb3c66841f9adc1bf6f5886122"
+        },
+        {
+          "path": "tests/fixtures/linode.json",
+          "sha256": "f38e61e2e26952a5077ea7fc8f65fe62a919e7925d55ceab8ace6cc503086b6a"
+        },
+        {
+          "path": "tests/fixtures/oci.json",
+          "sha256": "44ced20f65d26c67bda5cfad2982db2d6bbb798f54359f83a8628c8ead55ae1b"
+        },
+        {
+          "path": "tests/fixtures/ovh.json",
+          "sha256": "1c6ff85c6ebb9fd36b36cb3ccd78a8ab9afe510874ce7c45f8fe055f3d492352"
+        },
+        {
+          "path": "tests/fixtures/scaleway.json",
+          "sha256": "199e947cebe4b44d06c453efd79ed0acf90d44a31c49aa119d0ef196f3bab2a1"
+        },
+        {
+          "path": "tests/fixtures/vultr.json",
+          "sha256": "af893f1235369adfcbf8847872375a8010759d777bfae557ef75ec6cfd00a668"
         },
         {
           "path": "tests/test_installer.py",
@@ -127,15 +163,15 @@
         },
         {
           "path": "tests/ui.test.cjs",
-          "sha256": "baf9b716272fc6cd7241143a0140ae49563ad0bf6ef8fb1fe1e4db030709e1ab"
+          "sha256": "d3d36912841db3caba054c564493ab9ab5539726cfe1fe289f40055d991bd0e3"
         },
         {
           "path": "tests/worker.test.cjs",
-          "sha256": "c66f20a80b1d3d6f408477c0653d6addf533bd1c9f2373e095d152e9f2044844"
+          "sha256": "3a4e1ac2fc403fa727501cadc0427aceea55bfba99ef9645d303c5c5ba4fb423"
         },
         {
           "path": "ui/app.js",
-          "sha256": "d2e27cf0032b8e4acb0968c52f305d9c02e4417bd66bcd18038206fc57efcaa7"
+          "sha256": "48b036ddeb86774420cdab1a6e51e1e8e83a64b0f839939d50cafee247afa758"
         },
         {
           "path": "ui/index.html",
@@ -147,7 +183,7 @@
         },
         {
           "path": "worker.js",
-          "sha256": "b0be9d1e76c2bd5f1df0fac70cde4baed033d38af53bc13f7f5c46db76690414"
+          "sha256": "c70c4390a1254ff034db872bac02cbf4c887226c3063695fe06120db6184ce81"
         }
       ]
     },

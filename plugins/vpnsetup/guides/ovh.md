@@ -7,10 +7,18 @@ OVHcloud's browser page before using the plugin. Allow the needed GET, POST
 and DELETE paths for `/cloud/project/PROJECT/*` and
 `/publicCloud/project/PROJECT/*` including v2 instance/security-group APIs.
 Enter keys only in the native form; these are not OpenStack username/password
-credentials. Choose the matching endpoint region in setup.
+credentials. Setup first asks the API account region (EU, CA or US): choose the
+site where you created the keys, since every request goes there.
 
-Select a cloud region, flavor ID and Ubuntu 24.04 image ID. Obtain IDs using
-the project's flavor and image listings (the worker verifies them). The v2
+Optionally also allow `GET /publicCloud/project` (or the older
+`GET /cloud/project`): the plugin can then list your Public Cloud projects to
+choose from; without it, enter the project ID yourself. It then lists the
+project's enabled regions, the Linux flavors in stock in the chosen region
+(with OVHcloud's list price, cheapest first, approximate as your account's
+currency or tax may differ) and fills in the newest Ubuntu 24.04 image ID, and
+suggests the cheapest flavor; choose **Other (type a value)** to enter another
+flavor ID, or another region. When a list cannot be read, enter the value
+from the project's flavor and image listings; the worker verifies them. The v2
 security-group and instance APIs use the same OVH signed credentials; no
 additional OpenStack password is required for this path.
 

@@ -7,6 +7,11 @@ Automatic creation generates the API-required root password in the native
 vault; it does not expose the password to the worker, and cloud-init disables
 SSH password authentication. SSH uses the selected public key.
 
+The plugin lists the regions that can run a Linode with cloud-init and a Cloud
+Firewall, then the plans available in the chosen region now with at least
+1 GB RAM, cheapest first at that region's price, and suggests the cheapest;
+choose **Other (type a value)** to enter another.
+
 For console setup:
 
 1. Create a Linode using Ubuntu 24.04, at least 1 GB RAM, and your public SSH key.

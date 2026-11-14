@@ -2,10 +2,13 @@
 
 Activate billing and confirm Droplet/Reserved IP limits. For automatic setup,
 create a personal access token with read/create/delete access to Droplets,
-SSH keys, Reserved IPs, Cloud Firewalls and tags, plus read access to sizes and
-images. A custom-scoped token must include the dependencies listed by the
-provider for each action. Enter the token only in the native credential form.
-Choose an available region and size; the worker checks availability live.
+SSH keys, Reserved IPs, Cloud Firewalls and tags, plus read access to regions,
+sizes and images. A custom-scoped token must include the dependencies listed by
+the provider for each action. Enter the token only in the native credential
+form. The plugin then lists the regions where a Droplet can be created now,
+and the sizes with at least 1 GB RAM offered in the chosen one, cheapest
+first, and suggests the cheapest; choose **Other (type a value)** to enter
+another. The worker checks availability live before approval.
 
 For console setup:
 

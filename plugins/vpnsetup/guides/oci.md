@@ -15,6 +15,20 @@ select one in the console and copy its OCID. The worker verifies OS and shape
 compatibility. The automatic default is a 1 OCPU / 2 GB E4 Flex VM, not a promise of
 Always Free eligibility.
 
+The plugin offers the tenancy's root compartment (from the tenancy OCID you
+entered) and Oracle's main commercial regions; choose **Other (type a value)** to
+enter a dedicated compartment's OCID or another region, and choose a region
+your tenancy is subscribed to. Optionally also grant
+`Allow group <group> to inspect compute-capacity-reservations in compartment <compartment>`:
+the plugin can then list the region's availability domains; without it, enter
+the full name (such as `Uocm:US-ASHBURN-AD-1`). It then lists the x86 Flex
+shapes that can run with 1 OCPU and 2 GB RAM in that domain, with Oracle's
+approximate list price, cheapest first, and fills in the newest Canonical
+Ubuntu 24.04 image for the chosen shape. Fixed shapes, such as the Always Free
+`VM.Standard.E2.1.Micro`, cannot take the 1 OCPU / 2 GB size the plugin
+creates; the checks refuse them. Capacity and service limits are not visible
+before creation: a listed shape can still fail when the VM is launched.
+
 For console setup:
 
 1. Create a VCN, Internet Gateway and public subnet. Route 0.0.0.0/0 through

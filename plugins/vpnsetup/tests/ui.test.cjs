@@ -1102,3 +1102,17 @@ test('a setup reading the Hetzner catalog, or asking from its lists, created not
   await waiting.get('new').click();
   assert.deepEqual(waiting.calls.filter(call => call[0] === 'review').map(call => call[1].id), ['setup-gamma']);
 });
+
+test('a setup paused or stopped at one of its lists\' lookups created nothing, a Lightsail read-only POST included', async () => {
+  const lookup = { kind: 'http', id: 'delta-catalog-regions-1', method: 'POST', url: 'https://lightsail.us-east-1.amazonaws.com/', readOnly: true,
+    headers: { 'Content-Type': 'application/x-amz-json-1.1', 'X-Amz-Target': 'Lightsail_20161128.GetRegions' }, body: { includeAvailabilityZones: false } };
+  const asking = { provider: 'aws', phase: 'catalog', interruptedPhase: undefined, error: undefined, inputs: {}, catalog: { read: {} }, catalogRead: { name: 'regions', page: 1, attempt: 0 } };
+  const paused = harness([unchecked('delta', 70, { status: 'PAUSED', pendingStep: lookup, state: asking }), ...established()]); await flush();
+  assert.equal(paused.get('new').textContent, 'Continue VPN setup');
+  const stopped = harness([unchecked('delta', 71, { status: 'CANCELLED', pendingStep: lookup, state: { ...asking, phase: 'cancelled', suspendedPhase: 'catalog' } })]); await flush();
+  assert.equal(stopped.get('status').textContent, 'Setup stopped · nothing created');
+  // A Lightsail action that changes something is still counted as a create that may have gone out.
+  const create = { ...lookup, readOnly: undefined, headers: { ...lookup.headers, 'X-Amz-Target': 'Lightsail_20161128.CreateInstances' } };
+  const creating = harness([unchecked('delta', 72, { status: 'CANCELLED', pendingStep: create, state: { ...asking, phase: 'cancelled', suspendedPhase: 'catalog' } })]); await flush();
+  assert.notEqual(creating.get('status').textContent, 'Setup stopped · nothing created');
+});

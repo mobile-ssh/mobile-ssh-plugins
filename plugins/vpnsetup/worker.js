@@ -279,11 +279,14 @@
   // enters them only as identifier-like values (8 at most); the user's own validated settings are capped.
   const safe=v=>(typeof v==='string'||typeof v==='number')&&/^[A-Za-z0-9_.:-]{1,40}$/.test(String(v))?String(v):'';
   const shown=v=>{const t=String(v==null?'':v);return t.length>40?t.slice(0,37)+'...':t;};
+  const SETTING=/^[a-zA-Z0-9_.:-]{1,256}$/; // What a setting may hold (cleanInputs).
   function names(values) {
     const all=[...new Set(values.map(safe).filter(Boolean))];
     return all.slice(0,8).join(', ')+(all.length>8?' and '+(all.length-8)+' more':'');
   }
   const items=v=>Array.isArray(v)?v.filter(x=>x&&typeof x==='object'):[];
+  // A check's answer that the setting may be on its list's next page: that page is read under the same check (preflightPage).
+  const NEXT_PAGE={next:true},PREFLIGHT_PAGES=5;
   function preflight(s) {
     const p=s.inputs,req=(url)=>request(s,'GET',url), checks=[];
     const size=shown(p.size),region=shown(p.region),zone=shown(p.zone);
@@ -291,13 +294,17 @@
     const check=(label,request,problem)=>checks.push({label,request,problem:problem||(()=>'')});
     if(s.provider==='gcp') {
       const b='https://compute.googleapis.com/compute/v1/projects/'+enc(p.projectId);
-      check('Machine type',req(b+'/zones/'+enc(p.zone)+'/machineTypes/'+enc(p.size)),b=>b.name===p.size?'':'Google Cloud did not confirm machine type '+size+' in zone '+zone+'.');
+      // The address is made in the region and the server in the zone: a zone of another region fails only at the server's create.
+      // The create boots the amd64 image: an Arm type would fail there too (1.0.6).
+      check('Machine type',req(b+'/zones/'+enc(p.zone)+'/machineTypes/'+enc(p.size)),b=>{
+        if(!String(p.zone).startsWith(p.region+'-'))return 'Zone '+zone+' is not in region '+region+'. A Google Cloud zone is its region\'s name and a letter, such as us-central1-a in us-central1.';
+        if(b.name!==p.size)return 'Google Cloud did not confirm machine type '+size+' in zone '+zone+'.';
+        return b.architecture==='ARM64'?'Machine type '+size+' is an Arm type, and this setup boots Ubuntu 24.04 for x86 (amd64). Choose an x86 type, such as e2-small.':'';
+      });
       check('Ubuntu image',req('https://compute.googleapis.com/compute/v1/projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64'),
         b=>b.status==='READY'?'':'Google Cloud\'s Ubuntu 24.04 image is not ready'+(safe(b.status)?' (status '+safe(b.status)+')':'')+'.');
     } else if(s.provider==='aws') {
-      const aws=(action,body)=>request(s,'POST','https://lightsail.'+p.region+'.amazonaws.com/',body,{readOnly:true,
-        headers:{'Content-Type':'application/x-amz-json-1.1','X-Amz-Target':'Lightsail_20161128.'+action},
-        auth:{scheme:'aws',credentialRef:s.credentialRef,service:'lightsail',region:p.region}});
+      const aws=(action,body)=>lightsail(s,p.region,action,body);
       check('Lightsail bundle',aws('GetBundles',{includeInactive:false}),b=>{
         const bundle=items(get(b,'bundles')).find(x=>x.bundleId===p.size);
         return !bundle?'Lightsail has no bundle '+size+' in '+region+'.':bundle.isActive?'':'Lightsail bundle '+size+' is no longer offered.';
@@ -314,7 +321,9 @@
         b=>b.state==='Enabled'?'':safe(b.state)?'The Azure subscription is '+safe(b.state)+', not Enabled.':'Azure did not confirm that the subscription is enabled.');
       check('VM size',req('https://management.azure.com/subscriptions/'+enc(p.subscriptionId)+'/providers/Microsoft.Compute/locations/'+enc(p.region)+'/vmSizes?api-version=2024-07-01'),b=>{
         const sizes=items(get(b,'value'));
-        return sizes.some(x=>x.name===p.size)?'':sizes.length?'VM size '+size+' isn\'t offered in '+region+'.':'Azure listed no VM sizes in '+region+'. Check the region name.';
+        if(!sizes.some(x=>x.name===p.size))return sizes.length?'VM size '+size+' isn\'t offered in '+region+'.':'Azure listed no VM sizes in '+region+'. Check the region name.';
+        // A lower-case p among the size's feature letters is Arm (Azure's naming); the create boots the x64 image (1.0.6).
+        return /^Standard_[A-Z]+[0-9]+[a-z]*p[a-z]*(_|$)/.test(p.size)?'VM size '+size+' is an Arm size, and this setup boots Ubuntu 24.04 for x64. Choose an x64 size, such as Standard_B2ats_v2.':'';
       });
     } else if(s.provider==='digitalocean') {
       const url='https://api.digitalocean.com/v2/sizes?per_page=200';
@@ -364,14 +373,18 @@
       check('Instance plan',req('https://api.vultr.com/v2/plans?per_page=500'),b=>{
         const plan=items(get(b,'plans')).find(x=>x.id===p.size),regions=plan&&Array.isArray(plan.locations)?plan.locations:[];
         if(!plan)return 'Vultr has no plan '+size+'.';
+        if(!vultrLocal(plan))return 'Vultr plan '+size+' boots from Block Storage, which this setup does not create. Choose a plan with local storage, such as vc2-1c-1gb.';
         return regions.includes(p.region)?'':'Vultr plan '+size+' isn\'t offered in '+region+'.'+(names(regions)?' Regions with it: '+names(regions)+'.':'');
       });
     } else if(s.provider==='oci') {
       check('Ubuntu image',req('https://iaas.'+p.region+'.oraclecloud.com/20160918/images/'+enc(p.imageId)),
         b=>/ubuntu/i.test(b.operatingSystem||'')&&/24\.04/.test(b.operatingSystemVersion||'')?'':'The selected Oracle Cloud image is not Ubuntu 24.04.');
       check('Instance shape',req('https://iaas.'+p.region+'.oraclecloud.com/20160918/shapes?compartmentId='+enc(p.compartmentId)+'&availabilityDomain='+enc(p.zone)+'&imageId='+enc(p.imageId)),b=>{
-        const shapes=items(b).map(x=>x.shape);
-        return shapes.includes(p.size)?'':'Shape '+size+' isn\'t offered with this image in availability domain '+zone+'.'+(names(shapes)?' Shapes there: '+names(shapes)+'.':'');
+        const shapes=items(b).map(x=>x.shape),found=items(b).find(x=>x.shape===p.size);
+        if(!found)return 'Shape '+size+' isn\'t offered with this image in availability domain '+zone+'.'+(names(shapes)?' Shapes there: '+names(shapes)+'.':'');
+        // The create asks for 1 OCPU and 2 GB (shapeConfig), which a fixed shape (VM.Standard.E2.1.Micro, say) refuses (1.0.6).
+        if(found.isFlexible===false)return 'Shape '+size+' has a fixed size, and this setup creates a Flex shape with 1 OCPU and 2 GB RAM. Choose a Flex shape, such as VM.Standard.E4.Flex.';
+        return found.isFlexible===true&&!ociFits(found)?'Shape '+size+' cannot run with 1 OCPU and 2 GB RAM, as this setup creates it. Choose another Flex shape, such as VM.Standard.E4.Flex.':'';
       });
     } else if(s.provider==='ovh') {
       const base='https://'+(p.endpoint==='ca'?'ca.api.ovh.com':p.endpoint==='us'?'api.us.ovhcloud.com':'eu.api.ovh.com')+'/1.0/cloud/project/'+enc(p.projectId);
@@ -392,9 +405,15 @@
         if(arch!=='x86_64')return 'The selected Scaleway image is not for x86_64'+(safe(arch)?' (it is '+safe(arch)+')':'')+'.';
         return /ubuntu/i.test(name)&&/24\.04|noble/i.test(name)?'':'The selected Scaleway image is not Ubuntu 24.04.';
       });
-      check('Instance type',req(b+'/products/servers'),x=>{
-        const servers=get(x,'servers',{});
-        return typeof servers==='object'&&Object.prototype.hasOwnProperty.call(servers,p.size)&&servers[p.size]?'':'Scaleway has no instance type '+size+' in '+zone+'.';
+      // Scaleway lists its types alphabetically, 50 a page unless asked: before 1.0.6 only the first page was read, so a type
+      // further on (PLAY2, PRO2, STARDUST1...) was refused. 100 a page now, and the next page while x-total-count says more.
+      const page=s.preflightPage||1;
+      check('Instance type',req(b+'/products/servers?per_page=100&page='+page),(x,response)=>{
+        const servers=get(x,'servers',{}),keys=servers&&typeof servers==='object'&&!Array.isArray(servers)?Object.keys(servers):[];
+        if(keys.includes(p.size)&&servers[p.size])return '';
+        const total=Number(get(response,'headers',{})['x-total-count']);
+        if(keys.length&&Number.isFinite(total)&&total>(page-1)*100+keys.length&&page<PREFLIGHT_PAGES)return NEXT_PAGE;
+        return 'Scaleway has no instance type '+size+' in '+zone+'.';
       });
     }
     return checks;
@@ -420,7 +439,9 @@
     linode:[field('region','Region','us-east'),field('size','Plan','g6-nanode-1')],
     vultr:[field('region','Region','ewr'),field('size','Plan','vc2-1c-1gb'),field('imageId','Ubuntu 24.04 OS ID')],
     oci:[field('compartmentId','Compartment OCID'),field('region','Region','us-ashburn-1'),field('zone','Availability domain'),field('size','Flex shape','VM.Standard.E4.Flex'),field('imageId','Ubuntu 24.04 amd64 image OCID')],
-    ovh:[field('projectId','Public Cloud project ID'),field('endpoint','API account region','eu',{type:'select',options:['eu','ca','us'].map(value=>({value,label:value.toUpperCase()}))}),field('region','Cloud region','GRA11'),field('size','Flavor ID'),field('imageId','Ubuntu 24.04 image ID')],
+    // The API account region first (1.0.6): every OVHcloud request, the lists' too, goes to its host.
+    ovh:[field('endpoint','API account region','eu',{type:'select',options:[['eu','EU · Europe (eu.api.ovh.com)'],['ca','CA · Canada, Asia, Oceania (ca.api.ovh.com)'],
+      ['us','US · United States (api.us.ovhcloud.com)']].map(([value,label])=>({value,label}))}),field('projectId','Public Cloud project ID'),field('region','Cloud region','GRA11'),field('size','Flavor ID'),field('imageId','Ubuntu 24.04 image ID')],
     scaleway:[field('projectId','Project UUID'),field('zone','Zone','fr-par-1'),field('size','Commercial type','DEV1-S'),field('imageId','Ubuntu 24.04 image UUID')]
   };
   const SSH_FIELD=field('sshCidr','Allow SSH from IPv4 CIDR','0.0.0.0/0');
@@ -428,15 +449,106 @@
   // native review shows the message (else the title) above the field's label and the voice says the title, so neither repeats
   // the label ("Location" twice before 1.0.5). The message starts with the title. After Other the voice says what to give,
   // not the same question again (which sounded as if Other was not understood). Other providers keep the label as the title.
+  // {where} is the region answered before.
+  const WHERE='Where should the VPN server run?',LITTLE=' A VPN needs little, so the suggested one is plenty.';
+  const SSH_QUESTION=['Which addresses may connect over SSH?','','Enter an IPv4 range in CIDR form. 0.0.0.0/0 allows any address; logins still need this setup\'s SSH key.'];
   const QUESTIONS={hetzner:{
-    region:['Where should the VPN server run?','These Hetzner locations can take a new server in your account now.',
+    region:[WHERE,'These Hetzner locations can take a new server in your account now.',
       'Enter a Hetzner location name, such as fsn1, nbg1 or hel1.','Which location? Type or say its Hetzner name, such as fsn1.'],
-    size:['Which server type should it use?','These can be ordered in {where} now{order}. A VPN needs little, so the suggested one is plenty.',
+    size:['Which server type should it use?','These can be ordered in {where} now{order}.'+LITTLE,
       'Enter an x86 Hetzner server type, such as cx23.','Which server type? Type or say its name, such as cx23.'],
-    sshCidr:['Which addresses may connect over SSH?','','Enter an IPv4 range in CIDR form. 0.0.0.0/0 allows any address; logins still need this setup\'s SSH key.']}};
+    sshCidr:SSH_QUESTION},
+  vultr:{
+    region:[WHERE,'These Vultr regions offer plans with a public IPv4 address.','Enter a Vultr region ID, such as ewr, ams or sgp.',
+      'Which region? Type or say its Vultr ID, such as ewr.'],
+    size:['Which plan should it use?','These can be deployed in {where} now{order}.'+LITTLE,
+      'Enter a Vultr plan ID with at least 1 GB RAM, such as vc2-1c-1gb.','Which plan? Type or say its ID, such as vc2-1c-1gb.'],
+    imageId:['Which Ubuntu 24.04 image should it use?','These are Vultr\'s Ubuntu 24.04 x64 images; the newest is suggested.',
+      'Enter the Vultr OS ID of Ubuntu 24.04 LTS x64. The checks before anything is created name it if this one is wrong.','Which OS ID? Type or say the number.'],
+    sshCidr:SSH_QUESTION},
+  linode:{
+    region:[WHERE,'These Linode regions can run a new Linode with a Cloud Firewall now.','Enter a Linode region ID, such as us-east, eu-west or ap-south.',
+      'Which region? Type or say its Linode ID, such as us-east.'],
+    size:['Which plan should it use?','These are available in {where} now{order}.'+LITTLE,
+      'Enter a Linode plan ID with at least 1 GB RAM, such as g6-nanode-1.','Which plan? Type or say its ID, such as g6-nanode-1.'],
+    sshCidr:SSH_QUESTION},
+  digitalocean:{
+    region:[WHERE,'These DigitalOcean regions can take a new Droplet now.','Enter a DigitalOcean region slug, such as nyc3, ams3 or sfo3.',
+      'Which region? Type or say its slug, such as nyc3.'],
+    size:['Which Droplet size should it use?','These can be created in {where} now{order}.'+LITTLE,
+      'Enter a Droplet size slug with at least 1 GB RAM, such as s-1vcpu-1gb.','Which size? Type or say its slug, such as s-1vcpu-1gb.'],
+    sshCidr:SSH_QUESTION},
+  aws:{
+    region:[WHERE,'These are the Lightsail regions; those marked must be enabled in your AWS account first.','Enter a Lightsail region, such as us-east-1, eu-central-1 or ap-south-1.',
+      'Which region? Type or say its name, such as us-east-1.'],
+    zone:['Which availability zone should it use?','These zones are available in {where} now.','Enter an availability zone of {where}, such as {where}a.',
+      'Which zone? Type or say its name, such as {where}a.'],
+    size:['Which bundle should it use?','These Lightsail bundles with a public IPv4 address are offered in {where}{order}.'+LITTLE,
+      'Enter a Lightsail bundle ID with at least 1 GB RAM, such as micro_3_0.','Which bundle? Type or say its ID, such as micro_3_0.'],
+    sshCidr:SSH_QUESTION},
+  // A fixed list with no Other (the API account region) has only its title and the typed message, which says how to choose.
+  ovh:{
+    endpoint:['Which OVHcloud API site is your account on?','','Choose the one where you created the application key: EU for OVHcloud Europe, CA for Canada, Asia and Oceania, US for OVHcloud US.'],
+    projectId:['Which Public Cloud project should it use?','These are the Public Cloud projects these keys can see.',
+      'Enter the ID of your Public Cloud project: 32 letters and digits, shown under the project name in the OVHcloud Control Panel.','Which project? Type or say its ID.'],
+    region:[WHERE,'These regions are enabled for the project and take a new instance.','Enter an OVHcloud region name, such as GRA11, SBG5 or BHS5.',
+      'Which region? Type or say its name, such as GRA11.'],
+    size:['Which flavor should it use?','These Linux flavors are in stock in {where}{order}.'+LITTLE,
+      'Enter the ID of a Linux flavor in {where}, from the project\'s flavor list.','Which flavor ID? Type or say it.'],
+    imageId:['Which Ubuntu 24.04 image should it use?','These are OVHcloud\'s Ubuntu 24.04 images in {where}; the newest is suggested.',
+      'Enter the ID of the Ubuntu 24.04 image in {where}, from the project\'s image list.','Which image ID? Type or say it.'],
+    sshCidr:SSH_QUESTION},
+  scaleway:{
+    projectId:['Which Scaleway project should it use?','These are the projects this API key can see.',
+      'Enter the project ID, a UUID from the project\'s settings in the Scaleway console. It is not the organization ID.','Which project? Type or say its ID.'],
+    zone:[WHERE,'These are the Scaleway zones for Instances.','Enter a Scaleway zone, such as fr-par-1, nl-ams-1 or pl-waw-1.',
+      'Which zone? Type or say its name, such as fr-par-1.'],
+    size:['Which instance type should it use?','These x86 types with a local disk can be ordered in {where} now{order}.'+LITTLE,
+      'Enter an x86 Scaleway instance type with a local disk, such as DEV1-S.','Which instance type? Type or say its name, such as DEV1-S.'],
+    imageId:['Which Ubuntu 24.04 image should it use?','These are Scaleway\'s Ubuntu 24.04 images with a local disk for this type in {where}.',
+      'Enter the UUID of an Ubuntu 24.04 x86_64 image in {where}, from the Instance images list, not a marketplace product ID.','Which image UUID? Type or say it.'],
+    sshCidr:SSH_QUESTION},
+  // Google Cloud's and Azure's APIs give no prices the phone can read: their sizes are ordered by a list-price rank, not priced.
+  gcp:{
+    projectId:['Which Google Cloud project should it use?','These are the projects this service account can see.',
+      'Enter the project ID (not its name or number), as the project picker in the Google Cloud console shows it.','Which project? Type or say its ID.'],
+    region:[WHERE,'These Google Cloud regions have zones up in this project.','Enter a Google Cloud region, such as us-central1, europe-west1 or asia-southeast1.',
+      'Which region? Type or say its name, such as us-central1.'],
+    zone:['Which zone should it use?','These zones of {where} are up now.','Enter a zone of {where}: its name is the region\'s and a letter, such as us-central1-a in us-central1.',
+      'Which zone? Type or say its name, such as us-central1-a.'],
+    size:['Which machine type should it use?','These x86 machine types are offered in {zone}{order}.'+LITTLE+' Google Cloud\'s API gives no prices; its pricing page has them.',
+      'Enter an x86 machine type with at least 1 GB RAM, such as e2-small.','Which machine type? Type or say its name, such as e2-micro.'],
+    sshCidr:SSH_QUESTION},
+  azure:{
+    subscriptionId:['Which Azure subscription should it use?','These are the enabled subscriptions this app registration can use.',
+      'Enter the subscription ID, a GUID shown under Subscriptions in the Azure portal.','Which subscription? Type or say its ID.'],
+    region:[WHERE,'These are the subscription\'s regions, Azure\'s recommended ones first; those marked may need an access request first.',
+      'Enter an Azure region name, such as eastus, westeurope or southeastasia.','Which region? Type or say its name, such as eastus.'],
+    size:['Which VM size should it use?','These x64 sizes are offered in {where}{order}.'+LITTLE+' Azure\'s API gives no prices; its pricing page has them.',
+      'Enter an x64 VM size with at least 1 GB RAM, such as Standard_B1s or Standard_B2ats_v2.','Which VM size? Type or say its name, such as Standard_B2ats_v2.'],
+    sshCidr:SSH_QUESTION},
+  oci:{
+    compartmentId:['Which compartment should it use?','The root compartment is the whole tenancy; a dedicated one keeps the VPN\'s resources apart.',
+      'Enter the OCID of the compartment, from Identity, Compartments in the Oracle Cloud console.','Which compartment? Type or say its OCID.'],
+    region:[WHERE,'These are Oracle Cloud\'s main commercial regions; choose one your tenancy is subscribed to.',
+      'Enter an Oracle Cloud region identifier, such as us-ashburn-1, eu-frankfurt-1 or ap-tokyo-1.','Which region? Type or say its identifier, such as us-ashburn-1.'],
+    zone:['Which availability domain should it use?','These are the availability domains of {where}.',
+      'Enter the full availability domain name with its prefix, such as Uocm:US-ASHBURN-AD-1, as the console\'s instance page shows it.','Which availability domain? Type or say its full name.'],
+    size:['Which shape should it use?','These x86 Flex shapes can run with 1 OCPU and 2 GB RAM in this availability domain{order}.'+LITTLE,
+      'Enter an x86 Flex shape that allows 1 OCPU and 2 GB RAM, such as VM.Standard.E4.Flex.','Which shape? Type or say its name, such as VM.Standard.E4.Flex.'],
+    imageId:['Which Ubuntu 24.04 image should it use?','This is Oracle Cloud\'s newest Ubuntu 24.04 image for this shape in {where}.',
+      'Enter the OCID of a Canonical Ubuntu 24.04 image in {where} (amd64 for an x86 shape), from the console\'s image list.','Which image? Type or say its OCID.'],
+    sshCidr:SSH_QUESTION}};
+  // The place the questions name as {where}: the region, or Scaleway's zone (its sizes and images are per zone). {zone}: the
+  // zone answered before (Google Cloud's machine types are per zone).
+  const whereOf=s=>shown(s.provider==='scaleway'?s.inputs.zone:s.inputs.region);
+  const fill=(s,text)=>text.replace(/\{where\}/g,whereOf(s)).replace(/\{zone\}/g,shown(s.inputs.zone));
   // A listed question's last answer: the same setting asked again, typed (the host takes only listed values). The
   // parentheses keep it from ever being a setting (settingProblem).
   const OTHER='(other)',OTHER_LABEL='Other (type a value)',LISTED=12,LISTS=['region','size'];
+  // The app's voice offers at most 26 choices (more, and it sends the user to the phone): a longer list keeps LONG entries,
+  // so that with the earlier or entered-before answer, the suggestion and Other it stays within 26 (1.0.6).
+  const LONG=23;
   // What a provider offers this account now, read with its API key before the settings questions: read-only GETs, at most
   // CATALOG_PAGES pages each. reads: in order; list: where a read's array is ('' for one that is not a list); page: adds a
   // read's answer to the catalog read so far. Only Hetzner so far: its server types, its locations, and the currency of the
@@ -446,6 +558,8 @@
     next:b=>get(b,'meta.pagination.next_page'),page:hetznerPage}};
   // A place's name as provider data may give it: letters, digits and simple punctuation, short.
   const place=v=>typeof v==='string'&&/^[\p{L}\p{M}0-9 .,'()-]{1,40}$/u.test(v.trim())?v.trim():'';
+  // A name the account gave (an OVHcloud or Scaleway project): any text, without control or format characters, short.
+  const given=v=>typeof v==='string'?v.replace(/\p{C}+/gu,' ').replace(/[<>]/g,'').replace(/\s+/g,' ').trim().slice(0,32).trim():'';
   // Hetzner writes prices as decimal strings, the gross with 16 decimals ("1.1900000000000000"), the net with 10.
   const amount=v=>{const n=typeof v==='string'&&/^[0-9]{1,6}(\.[0-9]{1,20})?$/.test(v)?Number(v):typeof v==='number'?v:NaN;return Number.isFinite(n)&&n>=0&&n<1e6?n:null;};
   const count=v=>typeof v==='number'&&Number.isFinite(v)&&v>0&&v<100000?v:null;
@@ -488,6 +602,10 @@
   // since a voice "yes" takes the first choice, and Other last. null when the catalog lists nothing for it (server types in
   // a location typed after Other, say), which leaves the question typed as before. away: a type the catalog knows but not here.
   function choices(s,key) {
+    const found=LOOKUPS[s.provider]?listing(s,key):hetznerList(s,key);
+    return found&&offer(s,key,found);
+  }
+  function hetznerList(s,key) {
     const c=s.catalog,all=c&&Array.isArray(c.types)&&Array.isArray(c.locations)?offers(c).sort(cheaper):[];
     let full,suggested,sorted=false;
     if(key==='region'){
@@ -502,28 +620,610 @@
       full=here.map(x=>({value:x.t.n,label:sizeLabel(x,c.currency,x===here[0])}));
     }
     else return null;
-    const away=v=>key==='size'&&!full.some(o=>o.value===v)&&c.types.some(t=>t.n===v);
-    const previous=s.inputs[key],custom=get(s,'custom.'+key),kept=full.some(o=>o.value===previous);
-    const before=!kept&&!!custom&&custom===previous?[{value:custom,label:custom+(away(custom)?' (entered before, not available here)':' (entered before)')}]:[];
+    return {full,suggested,sorted,priced:sorted&&!!c.currency,cap:LISTED,away:v=>key==='size'&&!full.some(o=>o.value===v)&&c.types.some(t=>t.n===v)};
+  }
+  // Any provider's list as asked (full: its answers, suggestion first in price order; cap: how many before Other).
+  // lead: the suggestion is not the cheapest listed (one cheaper is low on stock, say).
+  // within: the entries a long list keeps (LONG), else the first cap. named: an entry's name where its value is an opaque ID
+  // (an OVHcloud flavor's UUID), for the entered-before label and the review.
+  function offer(s,key,{full,suggested,sorted,priced,cap,away,lead,within,named}) {
+    const previous=s.inputs[key],custom=get(s,'custom.'+key),kept=full.some(o=>o.value===previous),name=v=>named&&named(v)||v;
+    const before=!kept&&!!custom&&custom===previous?[{value:custom,label:name(custom)+(away(custom)?' (entered before, not available here)':' (entered before)')}]:[];
     const chosen=kept||before.length&&!away(custom)?previous:suggested;
-    const offered=before.concat(full.filter((o,at)=>at<LISTED||o.value===previous||o.value===suggested));
-    return {default:chosen,suggested,away,sorted,earlier:chosen!==suggested,priced:sorted&&!!c.currency,
+    const offered=before.concat(full.filter((o,at)=>(within?within(o.value):at<cap)||o.value===previous||o.value===suggested));
+    return {default:chosen,suggested,away,sorted,earlier:chosen!==suggested,lead:!!lead,priced,named,
       options:offered.filter(o=>o.value===chosen).concat(offered.filter(o=>o.value!==chosen),[{value:OTHER,label:OTHER_LABEL}])};
   }
+
+  // VPN Setup 1.0.6: the other providers' lists. A lookup is one read-only request (paged up to `pages`), sent just before the
+  // question `before` names, once the questions before it are answered; parse keeps a compact projection of its answer (a
+  // falsy one: unusable), and a request of null skips it (a read it builds on failed, or rule H below). catalog.read[name] holds
+  // what it kept, or null when it was refused, odd or skipped: the questions it feeds are then typed as before. fields: a listed
+  // question's entries from what was read; auto: a question answered without asking when its list holds one answer and
+  // nothing was typed for it before (Vultr's Ubuntu OS ID). Any refused, failed or odd read never stops the setup.
+  const strs=v=>Array.isArray(v)?v.filter(x=>typeof x==='string'):[];
+  const mb=v=>typeof v==='number'&&Number.isFinite(v)&&v>0&&v<1e8?v:null;
+  const gigs=v=>mb(v)&&Math.round(v/102.4)/10; // MB as GB with one decimal, as the labels show it
+  const where=(city,cc)=>[place(city),typeof cc==='string'&&/^[A-Za-z]{2}$/.test(cc)?cc.toUpperCase():''].filter(Boolean).join(', ');
+  // [region, cheapest monthly price there] pairs (a list, as region ids are object keys nowhere in the state).
+  function cheapest(at,region,cost){const x=at.find(p=>p[0]===region);if(cost===null||!(cost>0))return;if(!x)at.push([region,cost]);else if(cost<x[1])x[1]=cost;}
+  // The earlier, typed-before and usual answers the provider knows but cannot order here (a plan sold out there, say): one
+  // offered again is labelled as not available here, and after Other the suggestion is filled in instead.
+  function awayOf(s,key,known,listed) {
+    const usual=(OPTIONS[s.provider].find(f=>f.key===key)||{}).default;
+    return [...new Set([s.inputs[key],get(s,'custom.'+key),usual])].filter(v=>typeof v==='string'&&!listed.includes(v)&&known(v));
+  }
+  // A region list read, with the earlier, typed-before and usual regions the read names but leaves out (nyc2, not available).
+  const regionsRead=(s,all,id,list)=>({list,away:awayOf(s,'region',v=>items(all).some(x=>x[id]===v),list.map(x=>x[0]))});
+  const V='https://api.vultr.com/v2',LN='https://api.linode.com/v4',DO='https://api.digitalocean.com/v2';
+  // Vultr: the create asks for no IPv6 and connects to main_ip, so no IPv6-only (-v6) or VPC-only plan; x86 CPU plans only.
+  // And a local boot disk: a VX1 plan on Block Storage alone needs a boot volume the create does not send (one it made would
+  // outlive the deletion), so only local_storage and local_and_block_storage plans.
+  const vultrLocal=p=>/local/.test(String(p.storage_type||'local_storage'));
+  const vultrPrice=(p,r)=>{const here=amount(get(p,'location_cost.'+r+'.monthly_cost'));return here!==null?here:amount(p.monthly_cost);};
+  const vultrPlan=(p,r)=>!!safe(p.id)&&['vc2','vhf','vhp','voc','vx1','vdc'].includes(p.type)&&strs(p.locations).includes(r)&&mb(p.ram)>=1024&&
+    !!count(p.vcpu_count)&&vultrPrice(p,r)>0&&[undefined,null,'','none'].includes(p.gpu_brand)&&!/-v6$/.test(p.id)&&p.deploy_ondemand!==false&&
+    !/arm|ampere|graviton/i.test(String(p.cpu_vendor||''))&&vultrLocal(p);
+  // More than one page: Vultr's next cursor, DigitalOcean's next link (not followed: a page holds 500 and 200 here).
+  const pagesLeft=key=>b=>!!get(b,'meta.links.next')||!!get(b,'links.pages.next')||Number(get(b,'meta.total',0))>list(b,key).length;
+  // The same test as the checks' Ubuntu image check.
+  const vultrUbuntu=x=>Number.isSafeInteger(x.id)&&x.id>0&&typeof x.name==='string'&&/ubuntu/i.test(x.name)&&/24\.04/.test(x.name)&&x.arch==='x64';
+  // Linode: cloud-init (Metadata), the Cloud Firewall and a Linode itself must be offered in the region.
+  const linodePrice=(t,r)=>{const here=amount(get(items(t.region_prices).find(p=>p.id===r),'monthly'));return here!==null?here:amount(get(t,'price.monthly'));};
+  const linodePages=b=>Number(get(b,'pages',1))>Number(get(b,'page',1));
+  // DigitalOcean: a size is ordered in a region its own regions list names, as the checks require; no GPU, at least 1 GB.
+  const doSize=(x,disk)=>!!safe(x.slug)&&x.available===true&&mb(x.memory)>=1024&&!!count(x.vcpus)&&amount(x.price_monthly)>0&&
+    !/^gpu-/.test(x.slug)&&!(get(x,'gpu_info.count')>0)&&(typeof x.disk==='number'?x.disk>=disk:!disk);
+  // Lightsail: the setup attaches a static IPv4 and connects over it, so no IPv6-only bundle; Linux, not a Research bundle.
+  const lightsail=(s,region,action,body)=>request(s,'POST','https://lightsail.'+region+'.amazonaws.com/',body,{readOnly:true,
+    headers:{'Content-Type':'application/x-amz-json-1.1','X-Amz-Target':'Lightsail_20161128.'+action},auth:{scheme:'aws',credentialRef:s.credentialRef,service:'lightsail',region}});
+  const awsBundle=x=>!!safe(x.bundleId)&&x.isActive===true&&strs(x.supportedPlatforms).includes('LINUX_UNIX')&&x.publicIpv4AddressCount!==0&&
+    !/_ipv6_/.test(x.bundleId)&&!strs(x.supportedAppCategories).length&&typeof x.ramSizeInGb==='number'&&x.ramSizeInGb>=1&&amount(x.price)>0;
+  // Rule H: a region typed after Other never goes into a host name (a typo there is a DNS failure, which pauses the setup).
+  const awsListed=s=>!!s.catalog.read.regions&&s.catalog.read.regions.list.some(r=>r[0]===s.inputs.region);
+  // Regions a Lightsail account must enable before use (AWS's Lightsail regions page): listed last, marked, never suggested.
+  const AWS_OPT_IN=['ap-east-1','ap-southeast-3','ap-southeast-5','eu-south-2'],optIn=x=>AWS_OPT_IN.includes(x.name)?1:0;
+  const CONTINENTS=['NA','EU','AP','SA'],continent=x=>{const at=CONTINENTS.indexOf(x.continentCode);return at<0?CONTINENTS.length:at;};
+  // OVHcloud: every request goes to the API account region's host, signed natively. v2 lists page by a cursor header (100 a
+  // page asked); v1 lists are whole arrays (rule I: incompleteList's 50 for OVHcloud would misjudge them).
+  const OVH_HOSTS={eu:'eu.api.ovh.com',ca:'ca.api.ovh.com',us:'api.us.ovhcloud.com'},OVH_REGION={eu:'GRA11',ca:'BHS5',us:'US-EAST-VA-1'};
+  const ovhGet=(s,path,cursor)=>request(s,'GET','https://'+(OVH_HOSTS[s.inputs.endpoint]||OVH_HOSTS.eu)+path,undefined,/^\/v2\//.test(path)?
+    {headers:Object.assign({'Content-Type':'application/json','X-Pagination-Size':'100'},cursor?{'X-Pagination-Cursor':cursor}:{})}:{});
+  const ovhCursor=(b,response)=>{const c=get(response,'headers',{})['x-pagination-cursor-next'];return typeof c==='string'&&/^[\x21-\x7e]{1,1024}$/.test(c)?c:null;};
+  const ovhProject=s=>'/1.0/cloud/project/'+enc(s.inputs.projectId);
+  // OVHcloud's API has no prices but its public catalog, too large for the phone to read (about 8 MB): its monthly prices without
+  // tax (hourly × 730) as read on 2026-11-14, [EUR (EU site), CAD (CA site), USD (US site)], shown as approximate. Others unpriced.
+  const OVH_PRICES={'d2-2':[7.59,12.19,9.42],'d2-4':[15.04,24.09,18.69],'d2-8':[27.16,43.51,33.65],'c3-4':[33.36,53.44,39.42],'b3-8':[37.38,59.86,44.16],
+    'r3-16':[48.40,77.45,57.16],'b2-7':[51.76,82.86,64.17],'c3-8':[66.65,106.65,78.69],'c2-7':[74.31,118.92,92.13],'r2-15':[74.31,118.92,92.13],
+    'b3-16':[74.68,119.50,88.18],'r2-30':[85.85,137.39,106.43],'r3-32':[96.65,154.69,114.10],'b2-15':[97.97,156.80,121.40],'c3-16':[133.22,213.16,157.24],
+    'c2-15':[144.25,230.83,178.78],'b3-32':[149.36,239.00,176.29],'r2-60':[167.02,267.25,206.95],'r3-64':[193.30,309.30,228.12],'b2-30':[198.20,317.11,245.57]};
+  // The names of the earlier and typed-before IDs the read knows but does not list, for their entered-before labels.
+  const ovhNames=(s,key,all,list)=>askedFor(s,key).filter(v=>!list.some(x=>x[0]===v)).map(v=>[v,given(get(all.find(x=>x.id===v),'name'))]).filter(x=>x[1]);
+  const OVH_SITES=['eu','ca','us'],OVH_CURRENCIES=['EUR','CAD','USD'],ovhSite=s=>Math.max(0,OVH_SITES.indexOf(s.inputs.endpoint));
+  // v1 flavors give RAM in GB by the schema, in MB on some answers: either is read as GB, else the name's last number (b2-7: 7 GB).
+  const ovhRam=x=>{const r=typeof x.ram==='number'&&Number.isFinite(x.ram)&&x.ram>0?(x.ram>=256?Math.round(x.ram/1000):x.ram):0,n=/-(\d{1,4})$/.exec(x.name);
+    return r>=1?r:n&&Number(n[1])>=1?Number(n[1]):null;};
+  // A Linux flavor in stock, named <family><generation>-<n> (no Windows, -flex or other variants), not GPU, IOPS or bare metal.
+  const ovhFlavor=x=>safe(x.id)&&x.osType==='linux'&&x.available===true&&typeof x.name==='string'&&/^[a-z]\d+-\d+$/.test(x.name)&&
+    !/^(t1|t2|l4|a10|a100|h100|h200|i1|bm)-/.test(x.name)&&!!count(x.vcpus)&&ovhRam(x)>=1;
+  // Scaleway: one host for every list. Its products are a map of commercial types, paged by x-total-count (100 a page asked).
+  const SCW='https://api.scaleway.com',scwZone=s=>SCW+'/instance/v1/zones/'+enc(s.inputs.zone);
+  // No API lists the Instance zones; Scaleway's own SDKs hold the same list.
+  const SCW_ZONES=[['fr-par-1','Paris, FR'],['fr-par-2','Paris, FR'],['fr-par-3','Paris, FR'],['nl-ams-1','Amsterdam, NL'],['nl-ams-2','Amsterdam, NL'],
+    ['nl-ams-3','Amsterdam, NL'],['pl-waw-1','Warsaw, PL'],['pl-waw-2','Warsaw, PL'],['pl-waw-3','Warsaw, PL'],['it-mil-1','Milan, IT']];
+  const scwMap=b=>{const m=get(b,'servers');return m&&typeof m==='object'&&!Array.isArray(m)?m:null;};
+  const scwMore=(b,response,kept,page)=>{const total=Number(get(response,'headers',{})['x-total-count']),m=scwMap(b);
+    return m&&Object.keys(m).length&&Number.isFinite(total)&&total>kept.seen?page+1:null;};
+  const scwPrice=x=>{const h=amount(x.hourly_price);return h===null?null:h*730;};
+  const gib=v=>{const g=typeof v==='number'&&Number.isFinite(v)&&v>0?v/1073741824:0;return g?g<10?Math.round(g*10)/10:Math.round(g):null;};
+  // A type the setup can use as it creates: x86 (the image is), not retired, no GPU or Windows, at least 1 GB, and a local (l_ssd)
+  // boot volume. The create sends no volumes, so the root disk follows the image; deletion removes Instance-API volumes only, so
+  // a Block Storage (SBS) root would be left billing: only local-disk types with a local-disk Ubuntu image are listed.
+  const scwType=(x,k)=>!!x&&typeof x==='object'&&x.arch==='x86_64'&&x.end_of_service!==true&&!(Number(x.gpu)>0)&&!/-WIN$/.test(k)&&
+    Number(x.ram)>=1073741824&&Number(get(x,'per_volume_constraint.l_ssd.max_size',0))>0;
+  // Google Cloud: a token page (nextPageToken, sent back as pageToken). The phone cannot reach Cloud Billing, so machine types are
+  // ordered by this rank of us-central1 list prices, never shown; others follow by size. Only x86 types of the series that boot
+  // from the pd-standard disk the create gets (it names no disk type) and the amd64 image it boots: no Arm, GPU or custom types,
+  // 1 to 16 GB and at most 4 vCPU. Zones are the region's name and a letter: the address is made in the region, the server in the zone.
+  const GCE='https://compute.googleapis.com/compute/v1/projects/',gcpProject=s=>GCE+enc(s.inputs.projectId);
+  const tokenNext=b=>typeof b.nextPageToken==='string'&&/^[\x21-\x7e]{1,2048}$/.test(b.nextPageToken)?b.nextPageToken:null;
+  const gcpFields=(list,token)=>'&fields='+enc(list)+(token?'&pageToken='+enc(token):'');
+  const GCP_RANK=['e2-micro','e2-small','e2-medium','t2d-standard-1','n1-standard-1','e2-standard-2','n2d-standard-2','n2-standard-2'];
+  const gcpArm=name=>/^(t2a|c4a|n4a|a4x)-/.test(String(name));
+  const gcpType=x=>!!safe(x.name)&&get(x,'deprecated.state','ACTIVE')==='ACTIVE'&&x.architecture!=='ARM64'&&!gcpArm(x.name)&&!items(x.accelerators).length&&
+    ['e2','n1','n2','n2d','t2d'].includes(x.name.split('-')[0])&&!/-custom-/.test(x.name)&&!!count(x.guestCpus)&&x.guestCpus<=4&&mb(x.memoryMb)>=1024&&x.memoryMb<=16384;
+  // The regions' short names, from Google Cloud's regions table (2026-11): its API names none.
+  const GCP_PLACES={'africa-south1':'Johannesburg','asia-east1':'Taiwan','asia-east2':'Hong Kong','asia-northeast1':'Tokyo','asia-northeast2':'Osaka',
+    'asia-northeast3':'Seoul','asia-south1':'Mumbai','asia-south2':'Delhi','asia-southeast1':'Singapore','asia-southeast2':'Jakarta','asia-southeast3':'Bangkok',
+    'australia-southeast1':'Sydney','australia-southeast2':'Melbourne','europe-central2':'Warsaw','europe-north1':'Finland','europe-north2':'Stockholm',
+    'europe-southwest1':'Madrid','europe-west1':'Belgium','europe-west10':'Berlin','europe-west12':'Turin','europe-west2':'London','europe-west3':'Frankfurt',
+    'europe-west4':'Netherlands','europe-west6':'Zurich','europe-west8':'Milan','europe-west9':'Paris','me-central1':'Doha','me-central2':'Dammam',
+    'me-west1':'Tel Aviv','northamerica-northeast1':'Montreal','northamerica-northeast2':'Toronto','northamerica-south1':'Queretaro',
+    'southamerica-east1':'Sao Paulo','southamerica-west1':'Santiago','us-central1':'Iowa','us-east1':'South Carolina','us-east4':'Virginia',
+    'us-east5':'Columbus','us-south1':'Dallas','us-west1':'Oregon','us-west2':'Los Angeles','us-west3':'Salt Lake City','us-west4':'Las Vegas'};
+  // The earlier, typed-before and usual answers a full per-place list (a zone's machine types, a region's VM sizes) leaves out:
+  // they cannot be ordered there. found: which of them the list named, page by page.
+  const askedFor=(s,key)=>[s.inputs[key],get(s,'custom.'+key),(OPTIONS[s.provider].find(f=>f.key===key)||{}).default].filter(v=>typeof v==='string');
+  const absent=(s,key,x)=>x.partial?[]:awayOf(s,key,v=>!x.found.includes(v),x.list.map(y=>y[0]));
+  // Azure: one host for every list, paged by an absolute nextLink, followed only there (any other host would pause the setup).
+  // No price API is reachable and its VM-size list says nothing of architecture or generation, while the create boots the x64
+  // Gen2 Ubuntu 24.04 image on a Standard SSD: so only these sizes, known to fit, in East US list-price order. No B1ls (0.5 GB) or Arm.
+  const AZ='https://management.azure.com',azureSub=s=>AZ+'/subscriptions/'+enc(s.inputs.subscriptionId);
+  const azureNext=b=>typeof b.nextLink==='string'&&/^https:\/\/management\.azure\.com\/[\x21-\x7e]{1,2000}$/.test(b.nextLink)&&!/[@#\\]/.test(b.nextLink)?b.nextLink:null;
+  const AZURE_SIZES=['Standard_B2ats_v2','Standard_B2ts_v2','Standard_B1s','Standard_B1ms','Standard_B2als_v2','Standard_B2ls_v2','Standard_B2s','Standard_B2as_v2',
+    'Standard_B2s_v2','Standard_B2ms','Standard_D2as_v5','Standard_D2s_v5'];
+  const GUID=/^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+  // Oracle Cloud: every list from the region's own host, so only for a listed region (rule H: a typed one could be a DNS failure,
+  // which pauses the setup); pages by the opc-next-page header. Its identity host (subscribed regions, compartments, availability
+  // domains) is not one the key may reach: the regions are this static oc1 list (Oracle's public regions table, 2026-11-14), the compartment the tenancy's root, and the
+  // availability domains those the capacity-reservation list names (it needs inspect compute-capacity-reservations; refused: typed).
+  const OCI_REGIONS=[['af-casablanca-1','Casablanca, MA'],['af-johannesburg-1','Johannesburg, ZA'],['ap-batam-1','Batam, ID'],['ap-chuncheon-1','Chuncheon, KR'],
+    ['ap-hyderabad-1','Hyderabad, IN'],['ap-kulai-2','Kulai, MY'],['ap-melbourne-1','Melbourne, AU'],['ap-mumbai-1','Mumbai, IN'],
+    ['ap-osaka-1','Osaka, JP'],['ap-seoul-1','Seoul, KR'],['ap-singapore-1','Singapore, SG'],['ap-singapore-2','Singapore, SG'],['ap-sydney-1','Sydney, AU'],
+    ['ap-tokyo-1','Tokyo, JP'],['ca-montreal-1','Montreal, CA'],['ca-toronto-1','Toronto, CA'],['eu-amsterdam-1','Amsterdam, NL'],['eu-frankfurt-1','Frankfurt, DE'],
+    ['eu-madrid-1','Madrid, ES'],['eu-madrid-3','Madrid, ES'],['eu-marseille-1','Marseille, FR'],['eu-milan-1','Milan, IT'],['eu-paris-1','Paris, FR'],
+    ['eu-stockholm-1','Stockholm, SE'],['eu-turin-1','Turin, IT'],['eu-zurich-1','Zurich, CH'],['il-jerusalem-1','Jerusalem, IL'],['me-abudhabi-1','Abu Dhabi, AE'],
+    ['me-dubai-1','Dubai, AE'],['me-jeddah-1','Jeddah, SA'],['me-riyadh-1','Riyadh, SA'],['mx-monterrey-1','Monterrey, MX'],['mx-queretaro-1','Queretaro, MX'],
+    ['sa-bogota-1','Bogota, CO'],['sa-santiago-1','Santiago, CL'],['sa-saopaulo-1','Sao Paulo, BR'],['sa-valparaiso-1','Valparaiso, CL'],['sa-vinhedo-1','Vinhedo, BR'],
+    ['uk-cardiff-1','Newport, GB'],['uk-london-1','London, GB'],['us-ashburn-1','Ashburn, US'],['us-chicago-1','Chicago, US'],['us-phoenix-1','Phoenix, US'],
+    ['us-sanjose-1','San Jose, US']];
+  const ociListed=s=>OCI_REGIONS.some(r=>r[0]===s.inputs.region),ociBase=s=>'https://iaas.'+s.inputs.region+'.oraclecloud.com/20160918';
+  const ociGet=(s,path,page)=>ociListed(s)&&request(s,'GET',ociBase(s)+path+'compartmentId='+enc(s.inputs.compartmentId)+(page?'&page='+enc(page):''));
+  const ociNext=(b,response)=>{const t=get(response,'headers',{})['opc-next-page'];return typeof t==='string'&&/^[\x21-\x7e]{1,2048}$/.test(t)?t:null;};
+  const OCID=/^ocid1\.[a-z0-9]{1,30}\.oc1\.[a-z0-9-]{0,30}\.[a-z0-9]{1,100}$/;
+  // The create always asks for 1 OCPU and 2 GB (shapeConfig): only a Flex shape allowing that, and x86 only (the automatic
+  // choices target amd64; an Arm shape typed after Other gets its aarch64 image). Its monthly list price for that size in USD,
+  // read from Oracle's price list on 2026-11-14 (OCPU-hours and GB-hours × 730); others are listed unpriced and never suggested.
+  const OCI_PRICES={'VM.Standard.E3.Flex':20.44,'VM.Standard.E4.Flex':20.44,'VM.Standard.E5.Flex':24.82,'VM.Standard.E6.Flex':24.82,'VM.Standard3.Flex':31.39,'VM.Optimized3.Flex':41.61};
+  const ociArm=x=>/^VM\.Standard\.A[0-9]+\./.test(typeof x==='string'?x:String(x.shape||''))||typeof x==='object'&&/\b(Ampere|Arm)\b/i.test(String(x.processorDescription||''));
+  const bound=v=>typeof v==='number'&&Number.isFinite(v)?v:null;
+  // Whether a shape can run with 1 OCPU and 2 GB: a bound it does not state counts as none (as the checks treat it).
+  function ociFits(x) {
+    const o=x.ocpuOptions||{},m=x.memoryOptions||{},lo=Math.max(bound(m.minInGBs)||0,bound(m.minPerOcpuInGBs)||0);
+    const hi=Math.min(...[bound(m.maxInGBs),bound(m.maxPerOcpuInGBs)].filter(v=>v!==null),Infinity);
+    return (bound(o.min)===null||o.min<=1)&&(bound(o.max)===null||o.max>=1)&&lo<=2&&hi>=2;
+  }
+  const ociShape=x=>!!safe(x.shape)&&x.isFlexible===true&&/^VM\./.test(x.shape)&&!ociArm(x)&&!(Number(x.gpus)>0)&&!(Number(x.localDisks)>0)&&ociFits(x);
+  // Canonical's own builds: Canonical-Ubuntu-24.04[-Minimal][-aarch64]-YYYY.MM.DD-n.
+  const OCI_IMAGE=/^Canonical-Ubuntu-24\.04-(Minimal-)?(aarch64-)?([0-9]{4}\.[0-9]{2}\.[0-9]{2})-[0-9]+$/;
+  // Each provider's main regions, kept when its region list is longer than LONG: about one per large metro, the
+  // usual one among them. Only which entries stay; they are shown in the list's own order, and Other reaches the rest.
+  const MAIN={vultr:['ewr','ord','dfw','lax','sea','atl','mia','sjc','yto','sao','lhr','ams','fra','cdg','waw','sto','mad','nrt','icn','sgp','syd','bom','jnb'],
+    linode:['us-east','us-central','us-west','us-southeast','us-iad','us-ord','us-sea','us-lax','ca-central','br-gru','eu-west','gb-lon','eu-central','fr-par',
+      'nl-ams','se-sto','it-mil','es-mad','ap-south','ap-northeast','ap-west','ap-southeast','id-cgk'],
+    oci:['us-ashburn-1','us-phoenix-1','us-chicago-1','us-sanjose-1','ca-toronto-1','ca-montreal-1','sa-saopaulo-1','mx-queretaro-1','uk-london-1','eu-frankfurt-1',
+      'eu-amsterdam-1','eu-paris-1','eu-zurich-1','eu-stockholm-1','eu-milan-1','eu-madrid-1','me-dubai-1','ap-mumbai-1','ap-singapore-1','ap-tokyo-1','ap-seoul-1',
+      'ap-sydney-1','af-johannesburg-1'],
+    azure:['eastus','eastus2','centralus','westus2','westus3','southcentralus','canadacentral','brazilsouth','northeurope','westeurope','uksouth','francecentral',
+      'germanywestcentral','swedencentral','switzerlandnorth','polandcentral','italynorth','centralindia','southeastasia','japaneast','koreacentral','australiaeast',
+      'southafricanorth'],
+    gcp:['us-central1','us-east1','us-east4','us-west1','us-west2','us-south1','northamerica-northeast1','southamerica-east1','europe-west1','europe-west2',
+      'europe-west3','europe-west4','europe-west9','europe-north1','europe-central2','europe-southwest1','asia-south1','asia-southeast1','asia-east1',
+      'asia-northeast1','asia-northeast3','australia-southeast1','me-west1'],
+    ovh:['GRA11','GRA9','GRA7','SBG5','SBG7','BHS5','DE1','UK1','WAW1','SGP1','SYD1','US-EAST-VA-1','US-WEST-OR-1','EU-WEST-PAR','EU-SOUTH-MIL','CA-EAST-TOR','AP-SOUTH-MUM']};
+  const LOOKUPS={
+    vultr:{currency:'USD',lookups:[
+      {name:'regions',before:'region',url:()=>V+'/regions?per_page=500',next:pagesLeft('regions'),parse:(s,b)=>Array.isArray(b.regions)&&regionsRead(s,b.regions,'id',items(b.regions)
+        .filter(x=>safe(x.id)&&(!Array.isArray(x.connectivity)||x.connectivity.includes('public_ip'))).map(x=>[x.id,where(x.city,x.country)]))},
+      {name:'plans',before:'region',url:s=>s.catalog.read.regions&&V+'/plans?per_page=500',next:pagesLeft('plans'),parse:(s,b)=>{
+        if(!Array.isArray(b.plans))return null;const at=[];
+        for(const p of items(b.plans))for(const r of strs(p.locations))if(safe(r)&&vultrPlan(p,r))cheapest(at,r,vultrPrice(p,r));
+        return {at};
+      }},
+      // The region's own list: a plan it lacks is sold out there. Any refusal (an unknown region answers 401) leaves plans typed.
+      {name:'availability',before:'size',url:s=>s.catalog.read.plans&&V+'/regions/'+enc(s.inputs.region)+'/availability',parse:(s,b)=>
+        Array.isArray(b.available_plans)&&{open:strs(b.available_plans).filter(id=>safe(id)&&!strs(b.available_vpc_only_plans).includes(id))}},
+      {name:'sizes',before:'size',url:s=>s.catalog.read.availability&&V+'/plans?per_page=500',next:pagesLeft('plans'),parse:(s,b)=>{
+        if(!Array.isArray(b.plans))return null;const r=s.inputs.region,open=s.catalog.read.availability.open,plans=items(b.plans);
+        const here=plans.filter(p=>vultrPlan(p,r)&&open.includes(p.id)).map(p=>[p.id,count(p.vcpu_count),gigs(p.ram),vultrPrice(p,r)]);
+        return {list:here,away:awayOf(s,'size',v=>plans.some(p=>p.id===v),here.map(x=>x[0]))};
+      }},
+      {name:'os',before:'imageId',url:()=>V+'/os?per_page=500',next:pagesLeft('os'),parse:(s,b)=>{
+        if(!Array.isArray(b.os))return null;const here=items(b.os).filter(vultrUbuntu).sort((x,y)=>y.id-x.id).map(x=>[String(x.id),place(x.name)]);
+        return {list:here,away:awayOf(s,'imageId',v=>items(b.os).some(x=>String(x.id)===v),here.map(x=>x[0]))};
+      }}],
+    fields:{region:s=>regionList(s,'regions','plans','ewr'),size:s=>sizeList(s,'sizes','vc2-1c-1gb'),
+      imageId:s=>s.catalog.read.os&&{keep:true,away:s.catalog.read.os.away,entries:s.catalog.read.os.list.map(([value,rest])=>({value,rest}))}},
+    auto:['imageId']},
+    linode:{currency:'USD',lookups:[
+      {name:'regions',before:'region',url:()=>LN+'/regions?page_size=500',next:linodePages,parse:(s,b)=>Array.isArray(b.data)&&regionsRead(s,b.data,'id',items(b.data)
+        .filter(x=>safe(x.id)&&x.status==='ok'&&x.site_type!=='distributed'&&['Linodes','Metadata','Cloud Firewall'].every(c=>strs(x.capabilities).includes(c)))
+        .map(x=>[x.id,place(x.label)]))},
+      // A bare list of the region's plans, each available or not (sold out): the only signal of what can be ordered now.
+      {name:'availability',before:'size',url:s=>LN+'/regions/'+enc(s.inputs.region)+'/availability',parse:(s,b)=>Array.isArray(b)&&
+        {open:items(b).filter(x=>x.region===s.inputs.region&&x.available===true&&safe(x.plan)).map(x=>x.plan)}},
+      {name:'sizes',before:'size',url:s=>s.catalog.read.availability&&LN+'/linode/types?page_size=500',next:linodePages,parse:(s,b)=>{
+        if(!Array.isArray(b.data))return null;const r=s.inputs.region,open=s.catalog.read.availability.open,types=items(b.data);
+        const here=types.filter(t=>safe(t.id)&&open.includes(t.id)&&['nanode','standard','dedicated','premium','highmem'].includes(t.class)&&!(t.gpus>0)&&
+          !(t.accelerated_devices>0)&&mb(t.memory)>=1024&&!!count(t.vcpus)&&linodePrice(t,r)>0).map(t=>[t.id,count(t.vcpus),gigs(t.memory),linodePrice(t,r)]);
+        return {list:here,away:awayOf(s,'size',v=>types.some(t=>t.id===v),here.map(x=>x[0]))};
+      }}],
+    fields:{region:s=>regionList(s,'regions',null,'us-east'),size:s=>sizeList(s,'sizes','g6-nanode-1')}},
+    digitalocean:{currency:'USD',lookups:[
+      {name:'plans',before:'region',url:()=>DO+'/sizes?per_page=200',next:pagesLeft('sizes'),parse:(s,b)=>{
+        if(!Array.isArray(b.sizes))return null;const at=[];
+        for(const x of items(b.sizes))if(doSize(x,0))for(const r of strs(x.regions))if(safe(r))cheapest(at,r,amount(x.price_monthly));
+        return {at};
+      }},
+      {name:'image',before:'region',url:s=>s.catalog.read.plans&&DO+'/images/ubuntu-24-04-x64',parse:(s,b)=>!!get(b,'image.id')&&
+        {disk:count(get(b,'image.min_disk_size'))||0,regions:Array.isArray(get(b,'image.regions'))?strs(b.image.regions).filter(safe):null}},
+      // The create sends cloud-init, which needs the metadata service: where some region names it, regions without it are left out.
+      {name:'regions',before:'region',url:s=>s.catalog.read.plans&&DO+'/regions?per_page=200',next:pagesLeft('regions'),parse:(s,b)=>{
+        if(!Array.isArray(b.regions))return null;const all=items(b.regions),meta=all.some(x=>strs(x.features).includes('metadata')),image=s.catalog.read.image;
+        return regionsRead(s,all,'slug',all.filter(x=>safe(x.slug)&&x.available===true&&(!meta||strs(x.features).includes('metadata'))&&(!image||!image.regions||image.regions.includes(x.slug)))
+          .map(x=>[x.slug,place(x.name)]));
+      }},
+      {name:'sizes',before:'size',url:s=>s.catalog.read.plans&&DO+'/sizes?per_page=200',next:pagesLeft('sizes'),parse:(s,b)=>{
+        if(!Array.isArray(b.sizes))return null;const r=s.inputs.region,disk=get(s,'catalog.read.image.disk',0),sizes=items(b.sizes);
+        const here=sizes.filter(x=>doSize(x,disk)&&strs(x.regions).includes(r)).map(x=>[x.slug,count(x.vcpus),gigs(x.memory),amount(x.price_monthly)]);
+        return {list:here,away:awayOf(s,'size',v=>sizes.some(x=>x.slug===v),here.map(x=>x[0]))};
+      }}],
+    fields:{region:s=>regionList(s,'regions','plans','nyc3'),size:s=>sizeList(s,'sizes','s-1vcpu-1gb')}},
+    aws:{currency:'USD',lookups:[
+      // Regions from us-east-1's endpoint (one is needed before a region is chosen); zones and bundles from the chosen one's.
+      {name:'regions',before:'region',request:s=>lightsail(s,'us-east-1','GetRegions',{includeAvailabilityZones:false}),parse:(s,b)=>Array.isArray(b.regions)&&
+        {list:items(b.regions).filter(x=>typeof x.name==='string'&&/^[a-z]{2}-[a-z]+-[0-9]{1,2}$/.test(x.name))
+          .sort((x,y)=>optIn(x)-optIn(y)||continent(x)-continent(y)||(x.name<y.name?-1:1)).map(x=>[x.name,place(x.displayName)])}},
+      // Refused in an opt-in region: most likely not enabled for the account, so the region is asked again with that reason.
+      {name:'zones',before:'zone',request:s=>awsListed(s)&&lightsail(s,s.inputs.region,'GetRegions',{includeAvailabilityZones:true}),
+        ask:'region',refused:s=>AWS_OPT_IN.includes(s.inputs.region)&&'Lightsail did not answer in '+s.inputs.region+'. It is an opt-in region, which may not be enabled for this account: enable it in your AWS account settings, or choose another region.',
+        parse:(s,b)=>{
+        const area=items(b.regions).find(x=>x.name===s.inputs.region);if(!area)return null;
+        const all=items(area.availabilityZones).filter(z=>safe(z.zoneName)),stated=all.some(z=>Object.prototype.hasOwnProperty.call(z,'state'));
+        const here=all.filter(z=>!stated||z.state==='available').map(z=>z.zoneName);
+        return {list:here,away:awayOf(s,'zone',()=>true,here)};
+      }},
+      {name:'bundles',before:'size',pages:3,request:(s,token)=>awsListed(s)&&lightsail(s,s.inputs.region,'GetBundles',Object.assign({includeInactive:false},token?{pageToken:token}:{})),
+        next:b=>typeof b.nextPageToken==='string'&&/^[\x21-\x7e]{1,2048}$/.test(b.nextPageToken)?b.nextPageToken:null,parse:(s,b,read)=>{
+          if(!Array.isArray(b.bundles))return null;const all=items(b.bundles),was=read||{list:[],seen:[]};
+          const here=was.list.concat(all.filter(x=>awsBundle(x)&&!was.list.some(y=>y[0]===x.bundleId)).map(x=>[x.bundleId,count(x.cpuCount),x.ramSizeInGb,amount(x.price)]));
+          const seen=[...new Set(was.seen.concat(awayOf(s,'size',v=>all.some(x=>x.bundleId===v),[])))];
+          return {list:here,seen,away:seen.filter(v=>!here.some(x=>x[0]===v))};
+        }}],
+    fields:{region:s=>{const x=regionList(s,'regions',null,'us-east-1',true);
+        return x&&Object.assign(x,{entries:x.entries.map(e=>AWS_OPT_IN.includes(e.value)?Object.assign(e,{hold:true,note:'must be enabled first'}):e)});},
+      size:s=>sizeList(s,'bundles','micro_3_0'),
+      zone:s=>s.catalog.read.zones&&{entries:s.catalog.read.zones.list.map(value=>({value})),base:s.inputs.region+'a',away:s.catalog.read.zones.away}}},
+    ovh:{currency:s=>OVH_CURRENCIES[ovhSite(s)],approx:true,prices:' Prices are approximate, per month without tax, from OVHcloud\'s price list.',lookups:[
+      // The project list needs an access rule for GET /publicCloud/project, which keys made from the guide before 1.0.6 lack
+      // (refused: typed). Then, with v2 refused or failing, v1's list of IDs, which has no names.
+      {name:'projects',before:'projectId',pages:5,request:(s,cursor)=>ovhGet(s,'/v2/publicCloud/project',cursor),next:ovhCursor,parse:(s,b,read)=>{
+        if(!Array.isArray(b))return null;const was=read?read.list:[];
+        return {list:was.concat(items(b).filter(x=>safe(x.id)&&x.resourceStatus==='READY'&&!was.some(y=>y[0]===x.id)).map(x=>[x.id,
+          given(get(x,'currentState.name'))||given(get(x,'targetSpec.name'))||given(get(x,'iam.displayName')),get(x,'currentState.mode')==='DISCOVERY'?1:0]))};
+      }},
+      {name:'projectIds',before:'projectId',request:s=>s.catalog.read.projects===null&&ovhGet(s,'/1.0/cloud/project'),parse:(s,b)=>Array.isArray(b)&&
+        {list:strs(b).filter(safe).map(id=>[id,'',0])}},
+      // v2's regions (a BETA route) say what each is: only enabled single-zone regions activated for the project, as the create
+      // names no availability zone (a 3-AZ region needs one). v1's names alone, by their form, when v2 lists none (refused,
+      // failing, or its answer changed shape).
+      {name:'regions',before:'region',pages:3,request:(s,cursor)=>ovhGet(s,'/v2/publicCloud/project/'+enc(s.inputs.projectId)+'/reference/region',cursor),next:ovhCursor,
+        parse:(s,b,read)=>{
+          if(!Array.isArray(b))return null;const was=read?read.list:[];
+          const list=was.concat(items(b).filter(x=>safe(x.name)&&x.type==='REGION-1-AZ'&&x.status==='ENABLED'&&x.activated===true&&!was.some(y=>y[0]===x.name))
+            .map(x=>[x.name,where(x.datacenterName,x.country)]));
+          return {list,away:[...new Set((read&&read.away||[]).concat(regionsRead(s,b,'name',list).away))]};
+        }},
+      {name:'regionNames',before:'region',request:s=>!get(s,'catalog.read.regions.list.length')&&ovhGet(s,ovhProject(s)+'/region'),parse:(s,b)=>Array.isArray(b)&&regionsRead(s,strs(b).map(name=>({name})),'name',strs(b)
+        .filter(n=>safe(n)&&!/-LZ-/.test(n)&&(/^[A-Z]{2,4}[0-9]{1,2}$/.test(n)||/^[A-Z]{2}-[A-Z]+-[A-Z]+-[0-9]+$/.test(n))).map(n=>[n,'']))},
+      // The checks' own flavor list: what is in stock there now; one sold out is not available here.
+      {name:'flavors',before:'size',request:s=>ovhGet(s,ovhProject(s)+'/flavor?region='+enc(s.inputs.region)),parse:(s,b)=>{
+        if(!Array.isArray(b))return null;const all=items(b),price=n=>OVH_PRICES[n]?OVH_PRICES[n][ovhSite(s)]:null;
+        const list=all.filter(ovhFlavor).map(x=>[x.id,x.name,count(x.vcpus),ovhRam(x),price(x.name),x.quota===0?1:0,safe(x.type)]);
+        return {list,away:awayOf(s,'size',v=>all.some(x=>x.id===v&&x.available===false),list.map(x=>x[0])),names:ovhNames(s,'size',all,list)};
+      }},
+      // Ubuntu 24.04 as OVHcloud names it (else a plain variant), public and active, for this flavor's type if it names one; the
+      // newest and one older.
+      {name:'images',before:'imageId',request:s=>ovhGet(s,ovhProject(s)+'/image?osType=linux&region='+enc(s.inputs.region)),parse:(s,b)=>{
+        if(!Array.isArray(b))return null;const all=items(b),flavor=items(get(s,'catalog.read.flavors.list',[]).map(x=>({id:x[0],type:x[6]}))).find(x=>x.id===s.inputs.size);
+        const fits=all.filter(x=>safe(x.id)&&x.status==='active'&&x.type==='linux'&&x.visibility==='public'&&(x.flavorType==null||!!flavor&&!!flavor.type&&x.flavorType===flavor.type)&&
+          typeof x.name==='string'&&/ubuntu/i.test(x.name)&&/24\.04/.test(x.name)&&!/baremetal|gpu|uefi|docker/i.test(x.name));
+        const exact=fits.filter(x=>/^Ubuntu 24\.04$/i.test(x.name.trim())),made=x=>String(x.creationDate||'');
+        const pick=(exact.length?exact:fits).sort((x,y)=>made(y)<made(x)?-1:made(y)>made(x)?1:0).slice(0,2);
+        return {list:pick.map(x=>[x.id,given(x.name),/^[0-9]{4}-[0-9]{2}-[0-9]{2}/.test(made(x))?made(x).slice(0,10):'']),
+          away:awayOf(s,'imageId',v=>all.some(x=>x.id===v),pick.map(x=>x[0])),names:ovhNames(s,'imageId',all,pick.map(x=>[x.id]))};
+      }}],
+    fields:{
+      projectId:s=>{const x=s.catalog.read.projects||s.catalog.read.projectIds;return x&&{account:true,entries:x.list.map(([value,name,trial])=>
+        ({value,name,hold:!!trial,note:trial?'discovery mode, no payment method':''}))};},
+      region:s=>{const r=s.catalog.read,x=get(r,'regions.list.length')?r.regions:r.regionNames;return x&&{base:OVH_REGION[s.inputs.endpoint]||'GRA11',away:x.away,entries:x.list.map(([value,rest])=>({value,rest}))};},
+      // Shown by name (the value is its UUID); one without a known price, or with its quota used up, is never suggested.
+      size:s=>{const x=s.catalog.read.flavors;return x&&{sizes:true,away:x.away,names:x.names,entries:x.list.map(([value,name,c,m,price,full])=>
+        ({value,name,c,m,price,hold:!!full||!(price>0),note:full?'quota full':''}))};},
+      imageId:s=>s.catalog.read.images&&{keep:true,away:s.catalog.read.images.away,names:s.catalog.read.images.names,entries:s.catalog.read.images.list.map(([value,name,rest])=>({value,name,rest}))}},
+    auto:['imageId']},
+    scaleway:{currency:'EUR',prices:' Prices are per month without VAT.',lookups:[
+      // Listing projects needs project read access for the organization, which keys made from the guide may lack (typed then).
+      {name:'projects',before:'projectId',pages:5,request:(s,page)=>request(s,'GET',SCW+'/account/v3/projects?page_size=100&order_by=name_asc'+(page>1?'&page='+page:'')),
+        next:(b,response,kept,page)=>items(b.projects).length&&Number(b.total_count)>kept.seen?page+1:null,parse:(s,b,read)=>{
+          if(!Array.isArray(b.projects))return null;const was=read||{list:[],seen:0};
+          return {list:was.list.concat(items(b.projects).filter(x=>safe(x.id)&&!was.list.some(y=>y[0]===x.id)).map(x=>[x.id,given(x.name),given(x.description)])),
+            seen:was.seen+b.projects.length};
+        }},
+      // Before the type: the zone's local-disk Ubuntu 24.04 images, its types and what is in stock. Without such an image nothing
+      // can be listed, so the rest are not read.
+      {name:'images',before:'size',request:s=>request(s,'GET',SCW+'/marketplace/v2/local-images?image_label=ubuntu_noble&zone='+enc(s.inputs.zone)+'&arch=x86_64&page_size=100'),
+        parse:(s,b)=>{
+          if(!Array.isArray(b.local_images))return null;
+          const list=items(b.local_images).filter(x=>safe(x.id)&&x.type==='instance_local'&&x.arch==='x86_64'&&x.zone===s.inputs.zone&&x.label==='ubuntu_noble')
+            .map(x=>[x.id,strs(x.compatible_commercial_types).filter(safe)]).filter(x=>x[1].length);
+          return list.length&&{list};
+        }},
+      {name:'types',before:'size',pages:5,request:(s,page)=>s.catalog.read.images&&request(s,'GET',scwZone(s)+'/products/servers?per_page=100&page='+(page||1)),next:scwMore,
+        parse:(s,b,read)=>{
+          const map=scwMap(b);if(!map)return null;
+          const was=read||{list:[],seen:0,gone:[]},fits=items(get(s,'catalog.read.images.list',[]).map(x=>({types:x[1]}))).flatMap(x=>strs(x.types)),keys=Object.keys(map).filter(safe);
+          const asked=[s.inputs.size,get(s,'custom.size'),'DEV1-S'];
+          return {list:was.list.concat(keys.filter(k=>scwType(map[k],k)&&fits.includes(k)&&!was.list.some(x=>x[0]===k)).map(k=>[k,count(map[k].ncpus),gib(map[k].ram),scwPrice(map[k])])),
+            seen:was.seen+Object.keys(map).length,gone:[...new Set(was.gone.concat(keys.filter(k=>asked.includes(k)&&get(map[k],'end_of_service')===true)))]};
+        }},
+      // available, scarce (low stock: listed, never suggested) or shortage (cannot be ordered now: left out). Kept for the types
+      // listed and the earlier, typed and usual answers only.
+      {name:'availability',before:'size',pages:5,request:(s,page)=>s.catalog.read.types&&request(s,'GET',scwZone(s)+'/products/servers/availability?per_page=100&page='+(page||1)),
+        next:scwMore,parse:(s,b,read)=>{
+          const map=scwMap(b);if(!map)return null;
+          const was=read||{open:[],out:[],seen:0},want=s.catalog.read.types.list.map(x=>x[0]).concat([s.inputs.size,get(s,'custom.size'),'DEV1-S']);
+          const now=k=>get(map[k],'availability'),here=Object.keys(map).filter(k=>safe(k)&&want.includes(k));
+          return {open:[...new Set(was.open.concat(here.filter(k=>now(k)==='available')))],out:[...new Set(was.out.concat(here.filter(k=>now(k)==='shortage')))],
+            seen:was.seen+Object.keys(map).length};
+        }}],
+    fields:{
+      projectId:s=>{const x=s.catalog.read.projects;return x&&{account:true,base:(x.list.find(p=>p[1]==='default')||[])[0],entries:x.list.map(([value,name,rest])=>({value,name,rest}))};},
+      zone:()=>({keep:true,base:'fr-par-1',entries:SCW_ZONES.map(([value,rest])=>({value,rest}))}),
+      size:s=>{const r=s.catalog.read,t=r.types,a=r.availability;if(!t||!a)return null;
+        return {sizes:true,base:'DEV1-S',partial:t.partial||a.partial,away:t.gone.concat(a.out),entries:t.list.filter(x=>!a.out.includes(x[0])).map(([value,c,m,price])=>
+          ({value,c,m,price,hold:!a.open.includes(value),note:a.open.includes(value)?'':'low stock'}))};},
+      // The local-disk image this type can boot: normally one, filled in without asking.
+      imageId:s=>s.catalog.read.images&&{keep:true,entries:s.catalog.read.images.list.filter(x=>x[1].includes(s.inputs.size)).map(([value])=>({value,name:'Ubuntu 24.04 Noble',rest:'local disk'}))}},
+    auto:['imageId']},
+    gcp:{lookups:[
+      // Listing projects needs the Cloud Resource Manager API enabled in the key's project, which the guide made optional (refused: typed).
+      {name:'projects',before:'projectId',pages:3,request:(s,token)=>request(s,'GET','https://cloudresourcemanager.googleapis.com/v1/projects?filter=lifecycleState%3AACTIVE&pageSize=50'+
+        (token?'&pageToken='+enc(token):'')),next:tokenNext,parse:(s,b,read)=>{
+          if(!Array.isArray(b.projects))return null;const was=read?read.list:[];
+          return {list:was.concat(items(b.projects).filter(x=>x.lifecycleState==='ACTIVE'&&typeof x.projectId==='string'&&SETTING.test(x.projectId)&&!was.some(y=>y[0]===x.projectId))
+            .map(x=>[x.projectId,given(x.name)===x.projectId?'':given(x.name)]))};
+        }},
+      // One list gives the regions and their zones: zones up and not deprecated, grouped by the region they name.
+      {name:'zones',before:'region',pages:2,request:(s,token)=>request(s,'GET',gcpProject(s)+'/zones?maxResults=500'+gcpFields('items(name,status,region,deprecated/state),nextPageToken',token)),
+        next:tokenNext,parse:(s,b,read)=>{
+          if(!Array.isArray(b.items))return null;const at=read?read.at:[],seen=read&&read.seen||[];
+          for(const z of items(b.items)){
+            const r=String(z.region||'').split('/').pop();
+            if(askedFor(s,'region').includes(r)&&!seen.includes(r))seen.push(r); // Named, if only with zones down.
+            if(!safe(z.name)||!safe(r)||z.status!=='UP'||get(z,'deprecated.state','ACTIVE')!=='ACTIVE'||!z.name.startsWith(r+'-'))continue;
+            const x=at.find(y=>y[0]===r);if(!x)at.push([r,[z.name]]);else if(!x[1].includes(z.name))x[1].push(z.name);
+          }
+          return {at,seen};
+        }},
+      {name:'types',before:'size',pages:3,request:(s,token)=>request(s,'GET',gcpProject(s)+'/zones/'+enc(s.inputs.zone)+'/machineTypes?maxResults=500'+
+        gcpFields('items(name,guestCpus,memoryMb,isSharedCpu,architecture,accelerators,deprecated/state),nextPageToken',token)),next:tokenNext,parse:(s,b,read)=>{
+          if(!Array.isArray(b.items))return null;const was=read||{list:[],found:[]},all=items(b.items);
+          return {list:was.list.concat(all.filter(x=>gcpType(x)&&!was.list.some(y=>y[0]===x.name)).map(x=>[x.name,count(x.guestCpus),Math.round(x.memoryMb/10.24)/100,x.isSharedCpu===true?1:0])),
+            found:[...new Set(was.found.concat(askedFor(s,'size').filter(v=>all.some(x=>x.name===v))))]};
+        }}],
+    fields:{
+      projectId:s=>s.catalog.read.projects&&{account:true,entries:s.catalog.read.projects.list.map(([value,rest])=>({value,rest}))},
+      // us-* first, then by name; us-central1 (the usual one, with the e2-micro free tier) suggested.
+      region:s=>{const z=s.catalog.read.zones;return z&&{keep:true,base:'us-central1',away:awayOf(s,'region',v=>strs(z.seen).includes(v),z.at.map(x=>x[0])),entries:z.at.map(x=>x[0])
+        .sort((a,b)=>(!a.startsWith('us-'))-(!b.startsWith('us-'))||(a<b?-1:a>b?1:0)).map(value=>({value,rest:GCP_PLACES[value]||''}))};},
+      // Only the chosen region's zones: a zone elsewhere (the usual us-central1-a for europe-west1, say) is not available here.
+      zone:s=>{const z=s.catalog.read.zones,here=z&&(z.at.find(x=>x[0]===s.inputs.region)||[])[1];
+        return here&&{base:'us-central1-a',away:awayOf(s,'zone',v=>z.at.some(x=>x[1].includes(v)),here),entries:here.map(value=>({value}))};},
+      size:s=>{const x=s.catalog.read.types;return x&&{sizes:true,ranked:true,base:'e2-small',partial:x.partial,away:absent(s,'size',x),entries:x.list.map(([value,c,m,shared])=>
+        ({value,c,m,rank:GCP_RANK.includes(value)?GCP_RANK.indexOf(value):undefined,note:shared?'shared core':''}))};}}},
+    azure:{lookups:[
+      {name:'subscriptions',before:'subscriptionId',pages:3,request:(s,link)=>request(s,'GET',link||AZ+'/subscriptions?api-version=2022-12-01'),next:azureNext,parse:(s,b,read)=>{
+        if(!Array.isArray(b.value))return null;const was=read?read.list:[];
+        return {list:was.concat(items(b.value).filter(x=>x.state==='Enabled'&&typeof x.subscriptionId==='string'&&GUID.test(x.subscriptionId)&&!was.some(y=>y[0]===x.subscriptionId))
+          .map(x=>[x.subscriptionId,given(x.displayName)]))};
+      }},
+      // Physical regions only (no logical "unitedstates" or edge zone), Azure's recommended ones first, then US ones, then by name.
+      // Its other regions often need an access request: listed, never suggested.
+      {name:'regions',before:'region',request:s=>request(s,'GET',azureSub(s)+'/locations?api-version=2022-12-01'),parse:(s,b)=>{
+        if(!Array.isArray(b.value))return null;
+        const fit=items(b.value).filter(x=>safe(x.name)&&get(x,'metadata.regionType')==='Physical'&&[undefined,null,'Region'].includes(x.type)&&
+          ['Recommended','Other'].includes(get(x,'metadata.regionCategory')));
+        const key=x=>[get(x,'metadata.regionCategory')==='Recommended'?0:1,get(x,'metadata.geographyGroup')==='US'?0:1,String(x.displayName||x.name)];
+        fit.sort((x,y)=>{const a=key(x),c=key(y);return a[0]-c[0]||a[1]-c[1]||(a[2]<c[2]?-1:a[2]>c[2]?1:0);});
+        return regionsRead(s,b.value,'name',fit.map(x=>[x.name,place(x.displayName),get(x,'metadata.regionCategory')==='Recommended'?0:1]));
+      }},
+      // The checks' own VM-size list: every size the region offers this subscription.
+      {name:'sizes',before:'size',request:s=>request(s,'GET',azureSub(s)+'/providers/Microsoft.Compute/locations/'+enc(s.inputs.region)+'/vmSizes?api-version=2024-07-01'),parse:(s,b)=>{
+        if(!Array.isArray(b.value))return null;const all=items(b.value);
+        const list=AZURE_SIZES.map((n,rank)=>[all.find(x=>x.name===n),rank]).filter(([x])=>x&&mb(x.memoryInMB)>=1024&&!!count(x.numberOfCores))
+          .map(([x,rank])=>[x.name,count(x.numberOfCores),gigs(x.memoryInMB),rank]);
+        return {list,found:askedFor(s,'size').filter(v=>all.some(x=>x.name===v))};
+      }}],
+    fields:{
+      // Shown by name (two of the same name with their ID's start, as every account list).
+      subscriptionId:s=>{const x=s.catalog.read.subscriptions;return x&&{account:true,entries:x.list.map(([value,name])=>({value,name}))};},
+      // Azure's "Other" regions are listed, never suggested, and marked (briefly: the native list cuts long labels): some need an access request.
+      region:s=>{const x=s.catalog.read.regions;return x&&{keep:true,base:'eastus',away:x.away,entries:x.list.map(([value,rest,other])=>({value,rest,hold:!!other,note:other?'may need approval':''}))};},
+      size:s=>{const x=s.catalog.read.sizes;return x&&{sizes:true,ranked:true,base:'Standard_B1s',away:absent(s,'size',x),entries:x.list.map(([value,c,m,rank])=>({value,c,m,rank}))};}}},
+    oci:{currency:'USD',approx:true,prices:' Prices are approximate, per month in USD for 1 OCPU and 2 GB RAM, from Oracle\'s price list; the boot volume is extra.',lookups:[
+      // The availability domains of the region: those Oracle lists shapes for, noting where the usual E4 Flex (else E3 Flex) is.
+      {name:'domains',before:'zone',pages:5,request:(s,page)=>ociGet(s,'/computeCapacityReservationInstanceShapes?limit=100&',page),next:ociNext,parse:(s,b,read)=>{
+        if(!Array.isArray(b))return null;const at=read?read.at:[];
+        for(const x of items(b)){
+          if(!safe(x.availabilityDomain))continue;
+          const rank=x.instanceShape==='VM.Standard.E4.Flex'?0:x.instanceShape==='VM.Standard.E3.Flex'?1:2,y=at.find(d=>d[0]===x.availabilityDomain);
+          if(!y)at.push([x.availabilityDomain,rank]);else y[1]=Math.min(y[1],rank);
+        }
+        return {at};
+      }},
+      // The shapes in that availability domain the create can use; the checks list them for the image too.
+      {name:'shapes',before:'size',pages:5,request:(s,page)=>ociGet(s,'/shapes?availabilityDomain='+enc(s.inputs.zone)+'&limit=100&',page),next:ociNext,parse:(s,b,read)=>{
+        if(!Array.isArray(b))return null;const was=read?read.list:[];
+        return {list:was.concat(items(b).filter(x=>ociShape(x)&&!was.some(y=>y[0]===x.shape)).map(x=>[x.shape,OCI_PRICES[x.shape]||null]))};
+      }},
+      // Canonical's Ubuntu 24.04 builds for that shape, newest first: the newest full (not Minimal) one is filled in.
+      {name:'images',before:'imageId',request:s=>ociGet(s,'/images?operatingSystem=Canonical%20Ubuntu&operatingSystemVersion=24.04&shape='+enc(s.inputs.size)+
+        '&lifecycleState=AVAILABLE&sortBy=TIMECREATED&sortOrder=DESC&limit=50&'),parse:(s,b)=>{
+          if(!Array.isArray(b))return null;const arm=ociArm(s.inputs.size),made=x=>String(x.timeCreated||'');
+          const fits=items(b).filter(x=>typeof x.id==='string'&&OCID.test(x.id)&&SETTING.test(x.id)&&x.lifecycleState==='AVAILABLE'&&/ubuntu/i.test(String(x.operatingSystem||''))&&
+            /24\.04/.test(String(x.operatingSystemVersion||''))&&OCI_IMAGE.test(String(x.displayName))&&!!OCI_IMAGE.exec(x.displayName)[2]===arm)
+            .sort((x,y)=>(!!OCI_IMAGE.exec(x.displayName)[1]-!!OCI_IMAGE.exec(y.displayName)[1])||(made(y)<made(x)?-1:made(y)>made(x)?1:0));
+          return {list:fits.slice(0,1).map(x=>{const m=OCI_IMAGE.exec(x.displayName);return [x.id,'Ubuntu 24.04'+(m[1]?' Minimal':''),'build '+m[3]];})};
+        }}],
+    fields:{
+      // The root compartment: the tenancy OCID the credential names (not a secret); another one by Other.
+      compartmentId:s=>typeof s.tenancyId==='string'&&{keep:true,account:true,entries:[{value:s.tenancyId,name:'Root compartment'}]},
+      region:()=>({base:'us-ashburn-1',entries:OCI_REGIONS.map(([value,rest])=>({value,rest}))}),
+      zone:s=>{const x=s.catalog.read.domains;if(!x)return null;const sorted=x.at.slice().sort((a,b)=>a[0]<b[0]?-1:a[0]>b[0]?1:0);
+        const best=sorted.reduce((a,d)=>!a||d[1]<a[1]?d:a,null);
+        return {keep:true,base:best&&best[0],entries:sorted.map(([value])=>({value,name:value.split(':').pop()}))};},
+      // Every shape gets 1 OCPU and 2 GB (the message says so): the labels name only the shape and price. The usual E4 Flex
+      // first among equal prices; one without a known price is never suggested.
+      size:s=>{const x=s.catalog.read.shapes;return x&&{sizes:true,base:'VM.Standard.E4.Flex',partial:x.partial,entries:x.list.map(([value,price])=>
+        ({value,price,rank:value==='VM.Standard.E4.Flex'?0:undefined,hold:!(price>0)}))};},
+      imageId:s=>s.catalog.read.images&&{keep:true,entries:s.catalog.read.images.list.map(([value,name,rest])=>({value,name,rest}))}},
+    auto:['imageId']}
+  };
+  // A region question's entries: the regions read, where the sizes read (prices) say something can be ordered, if they were read.
+  function regionList(s,name,prices,base,keep) {
+    const read=s.catalog.read,x=read[name],at=prices&&get(read[prices],'at');
+    if(!x||prices&&!Array.isArray(at))return null;
+    const cost=id=>{const p=at&&at.find(y=>y[0]===id);return p?p[1]:null;};
+    return {keep,base,away:(x.away||[]).concat(x.list.filter(([id])=>at&&cost(id)===null).map(r=>r[0])),
+      entries:x.list.filter(([id])=>!at||cost(id)!==null).map(([value,rest])=>({value,rest,price:cost(value)}))};
+  }
+  function sizeList(s,name,base) {
+    const x=s.catalog.read[name];
+    return x&&{sizes:true,base,partial:x.partial,away:x.away,entries:x.list.map(([value,c,m,price])=>({value,c,m,price}))};
+  }
+  // A listed question from what was read: sizes cheapest first (then smaller), with the cheapest suggested, unless the read was
+  // cut short (more pages than read), when the usual answer is suggested if listed; regions by name (Lightsail's by continent),
+  // the cheapest suggested, the usual one at equal prices or with none.
+  // An entry may also carry name (shown in place of an opaque id: an OVHcloud flavor's UUID), note (said last: "low stock") and
+  // hold (listed, never suggested: low on stock, quota full, a project that cannot pay). With every entry held, the usual one
+  // or the first is suggested. ranked: sizes ordered by rank stand for cheapest first though unpriced.
+  function listing(s,key) {
+    const from=LOOKUPS[s.provider],make=from.fields[key],x=make&&s.catalog&&s.catalog.read&&make(s);
+    if(!x)return null;
+    // Any value a setting may hold (rule E): Oracle Cloud's OCIDs are longer than the identifiers a reason repeats (safe).
+    const seen=new Set(),entries=items(x.entries).filter(e=>typeof e.value==='string'&&SETTING.test(e.value)&&!seen.has(e.value)&&!!seen.add(e.value));
+    if(!entries.length)return null;
+    const shownName=e=>given(e.name)||e.value,cost=e=>typeof e.price==='number'&&e.price>0?e.price:Infinity,priced=entries.some(e=>cost(e)<Infinity);
+    // rank: a static list-price order where the API gives no prices (Google Cloud, Azure), or a tie broken (Oracle Cloud's E4).
+    const rank=e=>typeof e.rank==='number'?e.rank:Infinity;
+    const name=(a,b)=>shownName(a)<shownName(b)?-1:shownName(a)>shownName(b)?1:a.value<b.value?-1:a.value>b.value?1:0;
+    const base=entries.find(e=>e.value===x.base);
+    let suggested;
+    if(x.sizes){
+      entries.sort((a,b)=>(cost(a)-cost(b)||0)||(rank(a)-rank(b)||0)||((a.m||0)-(b.m||0))||((a.c||0)-(b.c||0))||name(a,b));
+      const open=entries.find(e=>!e.hold);
+      suggested=x.partial&&base&&!base.hold?x.base:(open||base||entries[0]).value;
+    } else {
+      if(!x.keep)entries.sort(name);
+      const open=entries.filter(e=>!e.hold),pool=open.length?open:entries,low=Math.min(...pool.map(cost)),least=pool.filter(e=>cost(e)===low);
+      suggested=(least.find(e=>e.value===x.base)||(!open.length&&base)||least[0]).value;
+    }
+    const currency=typeof from.currency==='function'?from.currency(s):from.currency;
+    // An account's list (projects, subscriptions) suggests only what the provider marks (Scaleway's default project): the
+    // first by name is selected, not called suggested. Two of the same name are told apart by their ID's start.
+    const mark=e=>e.value===suggested&&(!x.account||!!base&&base.value===suggested)?' (suggested)':'';
+    const twin=e=>!!x.account&&!!given(e.name)&&entries.filter(y=>given(y.name)===given(e.name)).length>1;
+    const full=entries.map(e=>({value:e.value,label:[shownName(e)+mark(e),x.sizes?[cost(e)<Infinity&&currency?(from.approx?'~':'')+money(e.price,currency)+'/mo':'',
+      [e.c&&e.c+' vCPU',e.m&&e.m+' GB RAM'].filter(Boolean).join(', ')].filter(Boolean).join(' · '):[twin(e)?e.value.slice(0,8):'',place(e.rest)||given(e.rest)].filter(Boolean).join(' · '),
+      typeof e.note==='string'?e.note:''].filter(Boolean).join(' · ')}));
+    const away=Array.isArray(x.away)?x.away:[];
+    // A long list (Oracle Cloud's regions, a large account's projects) keeps the provider's main regions (MAIN), then the
+    // first ones as listed; the others are reached by Other.
+    let within;
+    if(!x.sizes&&entries.length>LONG){
+      const main=key==='region'&&MAIN[s.provider]||[];
+      within=(kept=>v=>kept.has(v))(new Set(entries.filter(e=>main.includes(e.value)).concat(entries.filter(e=>!main.includes(e.value))).slice(0,LONG).map(e=>e.value)));
+    }
+    // Names known for values not listed (an OVHcloud flavor sold out there), from the read.
+    const knownNames=Array.isArray(x.names)?x.names:[];
+    const named=v=>{const e=entries.find(y=>y.value===v),k=knownNames.find(y=>Array.isArray(y)&&y[0]===v);
+      const n=given(e?e.name:k&&k[1]),detail=key==='imageId'&&e?given(e.rest):'';return n&&n!==v?[n,detail].filter(Boolean).join(' · '):detail;};
+    return {full,suggested,sorted:!!x.sizes&&(priced||!!x.ranked)&&!x.partial,priced:!!x.sizes&&priced&&!!currency,cap:x.sizes?LISTED:Infinity,lead:!!x.sizes&&suggested!==entries[0].value,
+      away:v=>away.includes(v)&&!full.some(o=>o.value===v),within,named};
+  }
+  // The lookup the question at optionIndex waits for, if any.
+  function lookupDue(s) {
+    const from=LOOKUPS[s.provider];
+    if(!from||!s.catalog||typeof s.catalog!=='object')return null;
+    if(!s.catalog.read||typeof s.catalog.read!=='object'||Array.isArray(s.catalog.read))s.catalog.read={};
+    const keys=[...OPTIONS[s.provider],SSH_FIELD].map(f=>f.key),at=s.optionIndex||0;
+    return from.lookups.find(l=>!Object.prototype.hasOwnProperty.call(s.catalog.read,l.name)&&keys.indexOf(l.before)<=at)||null;
+  }
+  // The question at optionIndex answered from its list without asking (auto), or null.
+  function automatic(s) {
+    const from=LOOKUPS[s.provider],f=OPTIONS[s.provider][s.optionIndex||0];
+    if(!from||!f||!(from.auto||[]).includes(f.key)||s.typing===f.key)return null;
+    const found=listing(s,f.key),custom=get(s,'custom.'+f.key);
+    return found&&found.full.length===1&&(!custom||custom===found.full[0].value)?found.full[0].value:null;
+  }
+  // A lookup ends: what it kept, or null; then the questions go on.
+  function looked(s,value) {
+    const r=s.catalogRead;delete s.catalogRead;
+    if(r&&s.catalog&&s.catalog.read&&typeof r.name==='string'&&LOOKUPS[s.provider].lookups.some(l=>l.name===r.name))s.catalog.read[r.name]=value||null;
+    s.phase='options';return render(s);
+  }
+  // A lookup's answer. A busy or failing provider (429, 5xx) gets one more try after a short wait (its Retry-After, at most 10 s).
+  function lookupResult(s,event,b,status) {
+    const r=s.catalogRead,l=r&&LOOKUPS[s.provider].lookups.find(x=>x.name===r.name);
+    if(!l||!s.catalog)return looked(s,null);
+    if(r.wait){delete r.wait;r.attempt=1;return render(s);}
+    if(status>=200&&status<300&&b&&typeof b==='object'){
+      // Some lists page by a response header (OVHcloud's cursor, Scaleway's total count): parse and next see the response too.
+      let kept,more;try{kept=l.parse(s,b,r.read,event.result)||null;more=kept&&l.next&&l.next(b,event.result,kept,r.page);}catch(_){kept=null;}
+      if(!kept)return looked(s,null);
+      // Further pages in order, up to the cap; past it, what was read is used without claiming the cheapest.
+      if(more&&r.page<(l.pages||1)){r.page++;r.token=more;r.read=kept;r.attempt=0;return render(s);}
+      if(more)kept.partial=true;
+      return looked(s,kept);
+    }
+    // A refusal that says the answer before is unusable (a Lightsail opt-in region not enabled): that question again, with why.
+    const why=status>=400&&status<500&&status!==429&&l.refused&&l.refused(s);
+    if(why){
+      delete s.catalogRead;delete s.inputs[l.ask];s.optionIndex=[...OPTIONS[s.provider],SSH_FIELD].findIndex(f=>f.key===l.ask);
+      s.optionProblem=why;s.phase='options';return render(s);
+    }
+    if((status===429||status>=500)&&!r.attempt){
+      const after=Number(get(event,'result.headers',{})['retry-after']);
+      r.wait=Math.round(Math.min(Number.isFinite(after)&&after>0?after*1000:2000,10000));return render(s);
+    }
+    return looked(s,null);
+  }
+  // Whether the provider's lists were read this time (some of them, for LOOKUPS).
+  const catalogued=s=>!!s.catalog&&(!LOOKUPS[s.provider]||Object.values(s.catalog.read||{}).some(Boolean));
   // The settings question at optionIndex, as asked: listed from the catalog when it lists answers for it (unless Other was
   // chosen there: typing), else typed with the earlier answer or the usual default. After Other, a type the catalog knows
   // cannot be ordered in this location is not filled in again (cx23 where it is sold out): the suggestion is.
   function optionField(s) {
-    const f=[...OPTIONS[s.provider],SSH_FIELD][s.optionIndex||0],listed=s.catalog&&choices(s,f.key),typed=s.inputs[f.key]||f.default;
+    const f=[...OPTIONS[s.provider],SSH_FIELD][s.optionIndex||0],listed=s.catalog&&choices(s,f.key),typed=typedDefault(s,f);
     if(listed&&s.typing!==f.key)return Object.assign({},f,{type:'select',default:listed.default,options:listed.options});
-    return Object.assign({},f,typed?{default:listed&&listed.away(typed)?listed.suggested:typed}:{});
+    const asked=Object.assign({},f,typed?{default:listed&&listed.away(typed)?listed.suggested:typed}:{});
+    // A fixed list (OVHcloud's API sites) also lists its selected answer first: a voice "yes" takes the first choice.
+    if(Array.isArray(asked.options))asked.options=asked.options.filter(o=>o.value===asked.default).concat(asked.options.filter(o=>o.value!==asked.default));
+    return asked;
+  }
+  // A typed question's prefilled answer: the earlier one, else the usual one, unless an answer before rules it out (1.0.6):
+  // a zone of another region (us-east-1a after ap-south-1) becomes the region's first, and OVHcloud's region on another API
+  // site (GRA11 on the CA site) that site's own.
+  function typedDefault(s,f) {
+    const earlier=s.inputs[f.key],r=s.inputs.region;
+    if(f.key==='zone'&&['aws','gcp'].includes(s.provider)&&typeof r==='string'&&SETTING.test(r)){
+      const head=s.provider==='aws'?r:r+'-';
+      return typeof earlier==='string'&&earlier.startsWith(head)&&earlier.length>head.length?earlier:head+'a';
+    }
+    if(s.provider==='ovh'&&f.key==='region'){
+      const site=OVH_REGION[s.inputs.endpoint]||f.default;
+      return !earlier||Object.values(OVH_REGION).includes(earlier)&&earlier!==site?site:earlier;
+    }
+    return earlier||f.default;
   }
   // Where the settings questions start, every time they are asked: an automatic setup with a provider catalog reads it
-  // again first, so what is sold out is current (also after Change server settings or other credentials).
+  // again first, so what is sold out is current (also after Change server settings or other credentials). Other providers'
+  // lookups (LOOKUPS) start afresh and run as their questions come.
   function ask(s) {
     s.optionIndex=0;for(const key of ['optionProblem','catalog','catalogRead','typing'])delete s[key];
     if(s.mode==='automatic'&&CATALOG[s.provider]&&s.credentialRef){s.catalogRead={at:0,page:1,types:[],places:[]};s.phase='catalog';}
-    else s.phase='options';
+    else {s.phase='options';if(s.mode==='automatic'&&LOOKUPS[s.provider]&&s.credentialRef)s.catalog={read:{}};}
   }
   // The catalog read ends: kept when it lists something to order, else (any refused, failed or odd answer) the questions
   // are typed as before, and the read-only checks still say what is wrong. It never stops the setup.
@@ -535,15 +1235,25 @@
     }
     s.phase='options';s.optionIndex=0;return render(s);
   }
+  // The name the review shows beside a listed answer's opaque ID (an OVHcloud flavor's UUID: d2-2), or none (typed).
+  function nameOf(s,key,value) {
+    const listed=value&&s.catalog&&choices(s,key),n=listed&&listed.named&&listed.named(value);
+    if(n)s.names=Object.assign(s.names||{},{[key]:n});
+    else if(s.names){delete s.names[key];if(!Object.keys(s.names).length)delete s.names;}
+  }
   // The question's explanation, which the native review shows under its title: the question itself, what is listed or what
   // to type, prices, and how to give another answer.
   function optionMessage(s,current) {
-    const asked=(QUESTIONS[s.provider]||{})[current.key],listed=!!current.options&&!!s.catalog;
+    const asked=(QUESTIONS[s.provider]||{})[current.key],here=whereOf(s),other=LOOKUPS[s.provider];
+    // Listed from what was read: a list ending in Other (OVHcloud's fixed API account regions have none).
+    const listed=!!current.options&&!!s.catalog&&current.options.some(o=>o.value===OTHER);
     if(!asked)return '';
-    if(!listed)return asked[0]+' '+asked[2];
-    const how=current.key==='size'?choices(s,'size'):{},c=s.catalog,ip=how.priced&&(c.ipv4||[]).find(p=>p[0]===s.inputs.region);
-    return asked[0]+' '+asked[1].replace('{where}',shown(s.inputs.region)).replace('{order}',how.sorted?(how.earlier?', your earlier answer first, then cheapest first':', cheapest first'):'')+
-      (how.priced?' Prices are per month for the server alone; its public IPv4 address '+(ip?'adds '+money(ip[1],c.currency)+' a month.':'costs a little extra.'):'')+
+    if(!listed)return asked[0]+' '+fill(s,asked[2]);
+    const how=current.key==='size'||other?choices(s,current.key)||{}:{},c=s.catalog,ip=!other&&how.priced&&(c.ipv4||[]).find(p=>p[0]===s.inputs.region);
+    // Hetzner's server prices leave out the public IPv4 address; the others' plans include one.
+    return asked[0]+' '+fill(s,asked[1].replace('{where}',here)).replace('{order}',how.sorted?(how.earlier?', your earlier answer first, then cheapest first':
+      how.lead?', the suggested one first, then cheapest first':', cheapest first'):'')+
+      (how.priced?other?other.prices||' Prices are per month.':' Prices are per month for the server alone; its public IPv4 address '+(ip?'adds '+money(ip[1],c.currency)+' a month.':'costs a little extra.'):'')+
       ' For another one, choose Other.';
   }
 
@@ -817,6 +1527,16 @@
     if(s.phase==='credential')return input(s,'credential','Connect '+PROVIDERS[s.provider][0],CREDENTIALS[s.provider],{provider:s.provider,persistent:true,guide:'guides/'+s.provider+'.md'});
     if(s.phase==='sshKey')return input(s,'sshKey','Select or create the server SSH key',[],{provider:s.provider,algorithm:s.provider==='aws'?'rsa':'ed25519',guide:'guides/'+s.provider+'.md'});
     // The catalog's reads, one page at a time, each under its own step id (a refresh sends them again under the same ids).
+    // A lookup (LOOKUPS), or the wait before its one retry.
+    if(s.phase==='catalog'&&LOOKUPS[s.provider]){
+      const r=s.catalogRead,l=r&&LOOKUPS[s.provider].lookups.find(x=>x.name===r.name);
+      if(!l||!s.catalog||!Number.isSafeInteger(r.page)||r.page<1)return looked(s,null);
+      const id=s.deploymentId+'-catalog-'+l.name+'-'+r.page;
+      if(Number.isSafeInteger(r.wait)&&r.wait>=0&&r.wait<=10000)return output(s,{kind:'delay',id:id+'-wait',milliseconds:r.wait,delayMs:r.wait});
+      const req=l.request?l.request(s,r.token):(url=>url?request(s,'GET',url):null)(l.url(s));
+      if(!req)return looked(s,null);
+      return output(s,Object.assign({kind:'http',id:id+(r.attempt?'-again':'')},req));
+    }
     if(s.phase==='catalog'){
       const r=s.catalogRead,from=CATALOG[s.provider],what=r&&from&&from.reads[r.at];
       if(!from||!r||!Number.isSafeInteger(r.at)||!Number.isSafeInteger(r.page)||!Array.isArray(r.types)||!Array.isArray(r.places))return catalogDone(s,true);
@@ -824,21 +1544,26 @@
       return output(s,Object.assign({kind:'http',id:s.deploymentId+'-catalog-'+what+'-'+r.page},request(s,'GET',from.url(what,r.page))));
     }
     if(s.phase==='options'){
+      // First what the question waits for: a lookup, or its answer when the list leaves no choice.
+      const due=lookupDue(s);
+      if(due){s.catalogRead={name:due.name,page:1,attempt:0};s.phase='catalog';return render(s);}
+      const auto=automatic(s);
+      if(auto!==null){const k=OPTIONS[s.provider][s.optionIndex||0].key;s.inputs[k]=auto;nameOf(s,k,auto);s.optionIndex=(s.optionIndex||0)+1;return render(s);}
       const current=optionField(s),asked=(QUESTIONS[s.provider]||{})[current.key],message=optionMessage(s,current);
       // Asked again after an answer it could not use: why, as the native review's message and the page's problem.
       const refused=s.optionProblem?{message:s.optionProblem,error:{code:'invalid_setting',message:s.optionProblem}}:{};
-      return input(s,'instance',asked?(s.typing===current.key&&asked[3])||asked[0]:current.label,[current],Object.assign({id:s.deploymentId+'-options-'+(s.optionIndex||0),guide:'guides/'+s.provider+'.md',pricingUrl:PROVIDERS[s.provider][1]},message?{message}:{},refused));
+      return input(s,'instance',asked?fill(s,(s.typing===current.key&&asked[3])||asked[0]):current.label,[current],Object.assign({id:s.deploymentId+'-options-'+(s.optionIndex||0),guide:'guides/'+s.provider+'.md',pricingUrl:PROVIDERS[s.provider][1]},message?{message}:{},refused));
     }
     if(s.phase==='manual')return input(s,'instance','Create Ubuntu 24.04 using the console guide',[
       field('host','Public IPv4 address')],{guide:'guides/'+s.provider+'.md',publicKey:s.publicKey});
     if(s.phase==='manualUser')return input(s,'instance','Which SSH user should connect?',[
       field('user','SSH user',PROVIDERS[s.provider][2])],{guide:'guides/'+s.provider+'.md'});
-    if(s.phase==='confirm')return input(s,'confirm','Review VPN setup',[],{summary:{provider:PROVIDERS[s.provider][0],name:s.name,
-      settings:s.inputs,host:s.host,verified:s.verified||[],pricingUrl:PROVIDERS[s.provider][1],billing:'Cloud billing continues until its resources are deleted. Public IPv4 and bandwidth may be charged separately.'}});
+    if(s.phase==='confirm')return input(s,'confirm','Review VPN setup',[],{summary:Object.assign({provider:PROVIDERS[s.provider][0],name:s.name,
+      settings:s.inputs},s.names&&s.mode==='automatic'?{names:s.names}:{},{host:s.host,verified:s.verified||[],pricingUrl:PROVIDERS[s.provider][1],billing:'Cloud billing continues until its resources are deleted. Public IPv4 and bandwidth may be charged separately.'})});
     if(s.phase==='preflight') {
       const check=preflight(s)[s.preflightIndex||0];
       if(!check){s.phase='confirm';return render(s);}
-      return output(s,{kind:'http',id:s.deploymentId+'-preflight-'+(s.preflightIndex||0),...check.request});
+      return output(s,{kind:'http',id:s.deploymentId+'-preflight-'+(s.preflightIndex||0)+(s.preflightPage>1?'-'+s.preflightPage:''),...check.request});
     }
     // A recovery question carries its reason as message too, which the native review shows in place of the title.
     const reason=Object.assign({error:s.error},get(s,'error.message')?{message:s.error.message}:{});
@@ -939,7 +1664,7 @@
         s=Object.assign(clone(prior),{operation,targetClientId:get(snapshot,'inputs.clientId'),pending:null,error:null});
         // The snapshot is the deployment's latest job, which may have stopped part-way, such as a delete stopped after
         // its server went: its receipts carry over, its progress does not (a stale creationAbsent offered recreation).
-        for(const key of ['interruptedPhase','suspendedPhase','httpStage','extraCleanup','creationAbsent','creationSent','allowRecreate','checkStatus','optionProblem','accountResumePhase','verifyKey','verifyStage','dropletCheck','dropletSeen','finding','findMoved','sameAccountAsked','catalog','catalogRead','typing','custom'])delete s[key];
+        for(const key of ['interruptedPhase','suspendedPhase','httpStage','extraCleanup','creationAbsent','creationSent','allowRecreate','checkStatus','optionProblem','accountResumePhase','verifyKey','verifyStage','dropletCheck','dropletSeen','finding','findMoved','sameAccountAsked','catalog','catalogRead','typing','custom','preflightPage','tenancyId','names'])delete s[key];
       }
       s.version=1;s.operation=operation;s.deploymentId=s.deploymentId||get(snapshot,'inputs.deploymentId');
       if(!/^[a-zA-Z0-9_-]{1,64}$/.test(s.deploymentId||''))throw new Error('Native runner must supply a stable deploymentId');
@@ -957,7 +1682,7 @@
     // A catalog read that could not finish leaves the questions typed, as a refused one does.
     // Other credentials entered for it are not: that pause says so at once, and its Update cloud account credentials reads
     // the catalog again with them.
-    if(event.type==='error'&&s.phase==='catalog'&&event.code!=='CREDENTIAL_CHANGED')return catalogDone(s,true);
+    if(event.type==='error'&&s.phase==='catalog'&&event.code!=='CREDENTIAL_CHANGED')return LOOKUPS[s.provider]?looked(s,null):catalogDone(s,true);
     if(event.type==='error'){
       const failure=s.phase==='update'&&UPDATE_FAILURES[event.code];
       if(event.code==='UPDATE_RESTORE_FAILED'&&failure)delete s.health; // Its version line would describe a VPN that is down.
@@ -971,7 +1696,10 @@
         const v=event.value||{};
         if(s.phase==='provider'){if(!PROVIDERS[v.provider])throw new Error('Choose a supported provider');s.provider=v.provider;s.user=PROVIDERS[s.provider][2];s.phase=s.provider==='existing'?'sshKey':'mode';if(s.provider==='existing')s.mode='manual';}
         else if(s.phase==='mode'){s.mode=v.mode==='manual'?'manual':'automatic';s.phase=s.mode==='manual'?'sshKey':'credential';}
-        else if(s.phase==='credential'){if(typeof v.credentialRef!=='string')throw new Error('A native credential reference is required');s.credentialRef=v.credentialRef;s.phase=s.accountResumePhase||(s.sshCredentialRef?'options':'sshKey');if(s.accountResumePhase==='provision')s.httpStage='reconcile';delete s.accountResumePhase;s.optionIndex=0;if(['options','catalog'].includes(s.phase))ask(s);}
+        else if(s.phase==='credential'){if(typeof v.credentialRef!=='string')throw new Error('A native credential reference is required');s.credentialRef=v.credentialRef;
+          // Oracle Cloud's tenancy OCID is a public credential field the answer carries: its root compartment is offered (1.0.6).
+          if(s.provider==='oci'){const t=[v.tenancyId,get(v,'public.tenancyId')].find(x=>typeof x==='string'&&/^ocid1\.tenancy\.oc1\.\.[a-z0-9]{1,100}$/.test(x));if(t)s.tenancyId=t;else delete s.tenancyId;}
+s.phase=s.accountResumePhase||(s.sshCredentialRef?'options':'sshKey');if(s.accountResumePhase==='provision')s.httpStage='reconcile';delete s.accountResumePhase;s.optionIndex=0;if(['options','catalog'].includes(s.phase))ask(s);}
         else if(s.phase==='sshKey'){if(typeof v.credentialRef!=='string'||!/^ssh-(ed25519|rsa) [A-Za-z0-9+/=]+(?: .*)?$/.test(v.publicKey||'')||(s.provider==='aws'&&!v.publicKey.startsWith('ssh-rsa ')))throw new Error('Select a valid SSH key (RSA for Lightsail)');s.sshCredentialRef=v.credentialRef;s.publicKey=v.publicKey.split(/\s+/).slice(0,2).join(' ');if(s.mode==='manual')s.phase='manual';else ask(s);}
         else if(s.phase==='options'){
           const f=optionField(s),value=String((v[f.key]===undefined?f.default:v[f.key])||'').trim();
@@ -982,19 +1710,21 @@
           // A listed question takes only what it lists (the native review and the voice offer nothing else).
           const problem=settingProblem(f,value)||(f.options&&!f.options.some(o=>o.value===value)?'Choose one of the listed answers.':'');
           if(problem){s.optionProblem=problem;return render(s);}
-          delete s.optionProblem;s.inputs[f.key]=value;
+          delete s.optionProblem;s.inputs[f.key]=value;nameOf(s,f.key,f.options&&value);
           // A value typed while the catalog lists (after Other, or other than the default for a location it lists nothing in) is
           // offered again, as entered before, when the settings are asked again; another answer forgets it. Typed with no catalog,
           // or the default left as it was, it is only the earlier answer (an untouched cx23 is no choice to offer back).
-          if(!f.options&&s.catalog&&LISTS.includes(f.key)&&(s.typing===f.key||value!==f.default))s.custom=Object.assign(s.custom||{},{[f.key]:value});
+          // After Other the question was listed, though nothing was read yet (Oracle Cloud's compartment, a fixed list of zones).
+          if(!f.options&&(LOOKUPS[s.provider]?Object.keys(LOOKUPS[s.provider].fields):LISTS).includes(f.key)&&(s.typing===f.key&&!!s.catalog||catalogued(s)&&value!==f.default))
+            s.custom=Object.assign(s.custom||{},{[f.key]:value});
           else if(s.custom&&s.custom[f.key]!==value){delete s.custom[f.key];if(!Object.keys(s.custom).length)delete s.custom;}
           delete s.typing;
-          if((s.optionIndex||0)+1===OPTIONS[s.provider].length+1){s.inputs=cleanInputs(s.provider,s.inputs);delete s.catalog;s.preflightIndex=0;s.verified=[];s.phase='preflight';}
+          if((s.optionIndex||0)+1===OPTIONS[s.provider].length+1){s.inputs=cleanInputs(s.provider,s.inputs);delete s.catalog;delete s.preflightPage;s.preflightIndex=0;s.verified=[];s.phase='preflight';}
           else s.optionIndex=(s.optionIndex||0)+1;
         }
         else if(s.phase==='manual'){if(!/^\d{1,3}(\.\d{1,3}){3}$/.test(v.host||''))throw new Error('Enter public IPv4');s.host=v.host;s.phase='manualUser';}
         else if(s.phase==='manualUser'){if(!/^[a-z_][a-z0-9_-]{0,31}$/.test(v.user||''))throw new Error('Enter an SSH login name');s.user=v.user;s.phase='confirm';}
-        else if(s.phase==='confirm'){if(v.confirmed!==true&&v.approved!==true){s.phase='cancelled';return output(s);}s.phase=s.mode==='manual'?'bootstrap':'provision';s.httpStage='create';}
+        else if(s.phase==='confirm'){if(v.confirmed!==true&&v.approved!==true){s.phase='cancelled';return output(s);}delete s.names;s.phase=s.mode==='manual'?'bootstrap':'provision';s.httpStage='create';}
         else if(s.phase==='deleteConfirm'){
           if(v.confirmed!==true&&v.approved!==true){s.phase='cancelled';return output(s);}
           s.attempt=0;
@@ -1019,7 +1749,7 @@
             if(v.action==='edit')ask(s);
             else if(v.action==='retry')s.phase='preflight';
             // Other credentials may reach another account or project: every check runs again with them.
-            else if(v.action==='account'&&s.mode==='automatic'&&CREDENTIALS[s.provider]){s.accountResumePhase='preflight';s.preflightIndex=0;s.verified=[];s.phase='credential';}
+            else if(v.action==='account'&&s.mode==='automatic'&&CREDENTIALS[s.provider]){s.accountResumePhase='preflight';s.preflightIndex=0;delete s.preflightPage;s.verified=[];s.phase='credential';}
             return render(s);
           }
           if(v.action==='cleanup'){s.phase='deleteConfirm';return render(s);}
@@ -1049,6 +1779,7 @@
       if(s.phase==='cleanupWait'){s.phase='cleanup';if(!['deleteCheck','deleteRetry'].includes(s.httpStage))s.httpStage='deleteRead';return render(s);}
       if(s.phase==='extraWait'){s.phase='cleanupExtra';s.httpStage='deleteRead';return render(s);}
       const b=body(event),status=get(event,'result.status',200);
+      if(s.phase==='catalog'&&LOOKUPS[s.provider])return lookupResult(s,event,b,status);
       if(s.phase==='catalog') {
         const r=s.catalogRead,from=CATALOG[s.provider],what=r&&from&&from.reads[r.at],path=what&&from.list(what),values=path?get(b,path):[];
         // A list refused, or not a list, leaves the questions typed. Prices may be missing: the lists then show none.
@@ -1061,8 +1792,10 @@
       }
       if(s.phase==='preflight') {
         const check=preflight(s)[s.preflightIndex||0];
-        if(status<200||status>=300){s.checkStatus=status;return pause(s,check.label+' could not be verified ('+providerError(status,b)+'). Check account permissions, region, plan and Ubuntu 24.04 image.');}
+        if(status<200||status>=300){s.checkStatus=status;delete s.preflightPage;return pause(s,check.label+' could not be verified ('+providerError(status,b)+'). Check account permissions, region, plan and Ubuntu 24.04 image.');}
         const problem=check.problem(b&&typeof b==='object'?b:{},event.result);
+        if(problem===NEXT_PAGE){s.preflightPage=(s.preflightPage||1)+1;return render(s);}
+        delete s.preflightPage;
         if(problem){delete s.checkStatus;return pause(s,problem);}
         s.verified=(s.verified||[]).concat(check.label);s.preflightIndex=(s.preflightIndex||0)+1;return render(s);
       }

@@ -5,10 +5,15 @@ configure its source-IP allowlist so the phone's connection can use it. A key
 that only allows a fixed home address will fail when the phone switches to
 mobile data. Enter the key in the native form.
 
-Choose a region and available plan with at least 1 GB RAM. Obtain the current
-Ubuntu 24.04 x64 OS ID from `GET /v2/os` or the API documentation; IDs must be
-verified rather than assumed. The worker verifies the chosen OS and plan's
-regional availability before approval.
+The plugin then lists Vultr's regions and the plans the chosen region can
+deploy now with a public IPv4 address and at least 1 GB RAM, cheapest first,
+and suggests the cheapest; choose **Other (type a value)** to enter another.
+Plans that boot only from Block Storage (some VX1 plans) are not listed, and
+the checks refuse one entered after Other, since the setup creates no boot
+volume. It fills in the Ubuntu 24.04 x64 OS ID from Vultr's OS list (`GET /v2/os`);
+when that list cannot be read, enter the ID yourself. These lists are public,
+so they do not show whether the key works. The worker verifies the chosen OS
+and plan's regional availability before approval.
 
 For console setup:
 

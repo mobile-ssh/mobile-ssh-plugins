@@ -11,6 +11,15 @@ them. Enter its access-key ID and secret in the native credential form; include
 the session token for temporary credentials. Renew temporary credentials before
 resuming after expiry. A secret access key is not the account password.
 
+With these permissions the plugin lists the Lightsail regions (read through
+us-east-1), then the chosen region's availability zones and its bundles with a
+public IPv4 address and at least 1 GB RAM, cheapest first, and suggests the
+cheapest; choose **Other (type a value)** to enter another. Opt-in regions
+(such as Jakarta or Hong Kong) are listed last and marked: enable one in your
+AWS account settings before choosing it, or the region is asked again with that
+reason. If the identity may only use some regions, a list it cannot read is
+asked as a typed value instead.
+
 For Lightsail console setup:
 
 1. Create a Linux/Unix Ubuntu 24.04 instance with at least 1 GB RAM.

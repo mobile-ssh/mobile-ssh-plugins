@@ -55,8 +55,10 @@
     const state = job.state || {}, step = job.pendingStep || {}, creates = phase => ['provision','wait'].includes(phase);
     return creates(stoppedAt(job)) || unanswered(job) || !['ready','deleted'].includes(state.phase)
       && (state.creationSent === true || [state.interruptedPhase, state.suspendedPhase, state.accountResumePhase].some(creates))
-      || step.kind === 'http' && String(step.method || 'GET').toUpperCase() !== 'GET';
+      || step.kind === 'http' && String(step.method || 'GET').toUpperCase() !== 'GET' && !lightsailRead(step);
   };
+  // A Lightsail Get* action is a signed POST the native host also counts as read-only (a check, or a list's lookup).
+  const lightsailRead = step => step.readOnly === true && /^Lightsail_20161128\.Get[A-Za-z0-9]+$/.test(String((step.headers || {})['X-Amz-Target'] || ''));
   // A setup that reached its server: installing on it, or importing its first client.
   const touched = job => !!((job.state || {}).clients || []).length || ['bootstrap','import'].some(phase => [(job.state || {}).phase, stoppedAt(job)].includes(phase));
   // A setup that ended without its VPN (or its own cleanup) may hold something no receipt shows.

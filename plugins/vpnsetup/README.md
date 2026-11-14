@@ -48,6 +48,52 @@ for the console path; more RAM makes installation and upgrades less constrained.
    lists again, so what is sold out is current. When the lists cannot be read
    (a refused token, a busy API, an unexpected answer), the questions are typed
    as before, and the checks say what is wrong.
+   From VPN Setup 1.0.6, Vultr, Akamai / Linode, DigitalOcean and AWS
+   Lightsail ask the same way, with read-only requests sent just before the
+   question that needs them: the region (Lightsail: then its availability
+   zone), then the plan, size or bundle orderable there now with a public IPv4
+   address and at least 1 GB RAM, cheapest first, at that region's own price.
+   Vultr's Ubuntu 24.04 OS ID is filled in from Vultr's list when it holds
+   exactly one, so it is no longer typed. **Other (type a value)**, values
+   entered before, new reads after **Change server settings** or new
+   credentials, and typed questions when a list cannot be read all work as
+   for Hetzner; a busy API is asked once more after a short wait. A region
+   entered before that the fresh list names as unavailable is offered as not
+   available here, not selected. Vultr lists only plans with a local boot disk;
+   Lightsail marks the opt-in regions an account must enable first, and asks
+   the region again if one does not answer. A list of more than 23 regions
+   (Vultr, Linode, Oracle Cloud and large Azure or Google Cloud accounts) shows
+   the provider's main ones, so a voice answer stays possible (the voice offers
+   at most 26 choices); Other reaches the rest. Project and subscription lists
+   select the first by name without calling it suggested, and the review shows
+   the names of chosen values that are IDs (an OVHcloud flavor, an image).
+   OVHcloud asks the API account region (EU, CA or US) first, then lists the
+   Public Cloud projects (if the keys may list them), the project's enabled
+   regions, the Linux flavors in stock there with OVHcloud's list price (marked
+   approximate, as OVHcloud's API gives no prices; the flavor is shown by name),
+   and fills in the newest Ubuntu 24.04 image. Scaleway lists the projects (if
+   the key may list them), its Instance zones, then the x86 types with a local
+   disk in stock in the chosen zone, cheapest first (low stock marked, never
+   suggested), and fills in their Ubuntu 24.04 local-disk image. Scaleway's
+   checks now read every page of its instance types, so a type further down
+   its list (such as PLAY2, PRO2 or STARDUST1) is no longer refused as unknown.
+   Google Cloud lists the projects (if the Cloud Resource Manager API is
+   enabled), then the regions and the chosen region's zones that are up, then
+   the x86 machine types offered in that zone; Azure lists the enabled
+   subscriptions, the subscription's regions (Azure's recommended ones first)
+   and the x64 sizes the region offers from a list known to boot its Ubuntu
+   24.04 image. Neither API gives prices the plugin can read, so these sizes
+   show no price and are ordered by list price, the cheapest suggested
+   (`e2-micro`, `Standard_B2ats_v2`); typed, the defaults stay `e2-small` and
+   `Standard_B1s`. Oracle Cloud offers the tenancy's root compartment (its
+   OCID comes with the credentials), Oracle's main commercial regions, the region's
+   availability domains (if the policy allows inspecting capacity
+   reservations), the x86 Flex shapes that run with 1 OCPU and 2 GB, priced
+   from Oracle's list (approximate), and fills in the newest Ubuntu 24.04 image
+   for the chosen shape. The checks now also refuse a Google Cloud zone outside
+   the region, an Arm Google Cloud machine type or Azure size, and an Oracle
+   Cloud shape that cannot run with 1 OCPU and 2 GB, which before failed only
+   when the server was created.
 5. Review the resources and current provider pricing page. Provisioning begins
    only after native approval. Provider accounts, billing activation, terms,
    capacity and quota approval are completed in the provider's console.

@@ -11,6 +11,17 @@ create/read/delete operations. Enter tenant ID, client ID and the client-secret
 separately. Note the secret expiry date and renew it before future lifecycle
 operations.
 
+With that role the plugin lists your enabled subscriptions, the
+subscription's regions (Azure's recommended ones first; the others are marked,
+as some need an access request before VMs can be created there) and the region's x64 VM sizes
+that boot its Ubuntu 24.04 image, with at least 1 GB RAM. Azure's API gives the
+plugin no prices, so sizes are shown without one, in list-price order:
+`Standard_B2ats_v2` is suggested (cheaper than `Standard_B1s`, whose B-series
+v1 retires in November 2028). Choose **Other (type a value)** to enter another
+value; the checks refuse an Arm size, since the server boots the x64 image. A
+size listed can still be restricted for a subscription (SkuNotAvailable), which
+shows only when the VM is created.
+
 For console setup:
 
 1. Create a dedicated resource group and virtual network/subnet.

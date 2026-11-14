@@ -6,9 +6,21 @@ security groups, volumes and SSH keys. Enter the API secret key in the native
 form and the project UUID in setup; requests use X-Auth-Token. The project UUID
 is not the organization UUID.
 
-Choose a zone, x86 commercial type and Ubuntu 24.04/Noble image UUID compatible
-with that zone. Get the image ID from the Instance image API/console, not a
-marketplace product ID. The worker verifies the image architecture and type.
+Optionally give the key read access to the organization's projects (for
+example the `ProjectReadOnly` permission set at organization level): the plugin
+can then list them to choose from; without it, enter the project UUID yourself.
+It then lists the Instance zones, and for the chosen zone the x86 commercial
+types with a local disk that are in stock, cheapest first with their monthly
+price (types low on stock are marked and never suggested), and fills in the
+matching Ubuntu 24.04 (Noble) local-disk image; choose **Other (type a value)**
+to enter another zone or type. Only local-disk types are listed because
+cleanup deletes boot volumes through the Instance API: a type that boots from
+Block Storage (SBS) would leave that volume billing after a delete.
+
+When a list cannot be read, choose a zone, x86 commercial type and Ubuntu
+24.04/Noble image UUID compatible with that zone. Get the image ID from the
+Instance image API/console, not a marketplace product ID. The worker verifies
+the image architecture and type.
 
 For console setup:
 

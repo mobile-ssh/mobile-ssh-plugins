@@ -278,6 +278,220 @@ failure on one of its reads pauses the job natively, as any read does, and
 job continues with 1.0.4; a new operation started from a 1.0.5 setup drops
 `catalog`, `catalogRead`, `typing` and `custom`.
 
+From VPN Setup 1.0.6 Vultr, Akamai/Linode, DigitalOcean and AWS Lightsail
+list their settings the same way, with lookups sent inside the settings
+questions, each just before the question it feeds (once the questions before
+it are answered), in the `catalog` phase with step ids
+`<deploymentId>-catalog-<lookup>-<page>`. Every one is a read-only native
+`http` step on a host the provider's credential already reaches: a `GET`, or
+for Lightsail a signed `POST` whose `X-Amz-Target` is a `Get*` action with
+`readOnly: true`, so none asks for approval. The state keeps
+`catalog.read.<lookup>`, a compact projection (`{value,label}`-sized entries,
+never a provider body) or `null` when the lookup was refused, odd or skipped,
+until the questions are answered:
+
+- Vultr: `/v2/regions?per_page=500` and `/v2/plans?per_page=500` before
+  Region; `/v2/regions/<region>/availability` and the plans again before Plan;
+  `/v2/os?per_page=500` before the OS ID. Regions with a plan that fits; plans
+  the region lists as available now, not VPC-only, not IPv6-only (`-v6`), with
+  at least 1 GB, no GPU, at the region's own price. When exactly one OS is
+  Ubuntu 24.04 x64 (the checks' own test) its ID is filled in without asking;
+  several are a list, newest first. All four are public routes.
+- Linode: `/v4/regions?page_size=500` before Region (status `ok`, not a
+  distributed site, with Linodes, Metadata and Cloud Firewall);
+  `/v4/regions/<region>/availability` (a bare list, the sold-out signal) and
+  `/v4/linode/types?page_size=500` before Plan, at the region's own price.
+- DigitalOcean: `/v2/sizes?per_page=200`, `/v2/images/ubuntu-24-04-x64` and
+  `/v2/regions?per_page=200` before Region (available regions with the
+  metadata service cloud-init needs, where any region names it, and the image);
+  the sizes again before Droplet size (available, in the region's own list, at
+  least 1 GB and the image's minimum disk, no GPU).
+- Lightsail: `GetRegions` at `us-east-1` before Region; `GetRegions` with
+  availability zones at the chosen region before Availability zone (zones
+  `available` there); `GetBundles` there before Lightsail bundle (`pageToken`,
+  three pages at most; active Linux bundles with a public IPv4 address, no
+  `_ipv6_` bundle, at least 1 GB). A region typed after Other is never put in
+  a Lightsail host name: its zone and bundle are typed.
+
+Sizes are listed cheapest first, twelve at most, labelled `<id> · <price>
+USD/mo · <n> vCPU, <g> GB RAM`; regions by name (Lightsail's by continent),
+`<id> · <place>`. The suggestion is the cheapest size (the usual one when a
+list was cut short, which then claims no order), and the region where the
+cheapest size costs least (Vultr, DigitalOcean), the usual one at equal
+prices or with none known. Other, `custom`,
+`(entered before)` and `(entered before, not available here)` (a value the
+lookup knows but cannot be ordered there: a plan sold out in that region, a
+zone of another region, an OS that is not Ubuntu 24.04) behave as for
+Hetzner. HTTP 429 or 5xx gets one retry after a `delay` step (the
+`retry-after` header's seconds, 2 s without one, 10 s at most), step id
+`...-wait`, then `...-again`. Any other refusal, an odd body, an empty list or
+a lookup built on one that failed leaves the questions it feeds typed with
+their usual defaults, never a pause, except `CREDENTIAL_CHANGED` as above.
+The page counts a setup stopped on a Lightsail `Get*` request (a lookup or a
+check, `readOnly: true`) as having created nothing, as the native host does;
+before 1.0.6 any pending `POST` counted as a create that may have gone out.
+
+OVHcloud and Scaleway list their settings the same way from 1.0.6:
+
+- OVHcloud now asks `endpoint` (the API account region, a fixed `select` of
+  `eu`, `ca` and `us` with no Other, its selected answer listed first) before
+  `projectId`, since every request goes to that host. Then
+  `/v2/publicCloud/project` before the project (`X-Pagination-Size: 100`,
+  following `x-pagination-cursor-next` as `X-Pagination-Cursor`, five pages at
+  most; `READY` projects, one in `DISCOVERY` mode listed but never suggested),
+  or, with that refused or failing, v1 `/1.0/cloud/project` (IDs only);
+  `/v2/publicCloud/project/<id>/reference/region` before Cloud region
+  (`REGION-1-AZ`, `ENABLED`, `activated`: the create names no availability
+  zone), or v1 `/1.0/cloud/project/<id>/region` by name when v2 lists none;
+  `/1.0/cloud/project/<id>/flavor?region=<r>` before the flavor (the checks'
+  own list: Linux, `available`, plain `<family><n>-<n>` names, no GPU, IOPS or
+  bare metal; value the flavor UUID, label its name; one with `quota: 0` marked
+  and never suggested); and `/1.0/cloud/project/<id>/image?osType=linux&region=<r>`
+  before the image (active public `Ubuntu 24.04`, for the flavor's type when an
+  image names one, newest first, two at most), filled in when there is one.
+  Prices come from a static table of OVHcloud's public catalog (2026-11-14,
+  hourly × 730 without tax, EUR, CAD or USD by API site), shown as `~<price>`:
+  the catalog itself is about 8 MB, over the phone's 4 MiB response cap. A
+  flavor without a known price is listed after the priced ones and never
+  suggested. v1 lists are whole arrays and are not judged by `incompleteList`.
+- Scaleway: `/account/v3/projects?page_size=100&order_by=name_asc` before the
+  project (`&page=N` while `total_count` says more; the one named `default`
+  suggested); the zones are a fixed list with Other (no API lists them). Before
+  the commercial type, for the chosen zone: the marketplace's `ubuntu_noble`
+  x86_64 local images, then `products/servers` and
+  `products/servers/availability` (`per_page=100&page=N` while `x-total-count`
+  says more, five pages at most; the answers are maps). Listed: x86_64, not
+  `end_of_service`, no GPU or `-WIN`, at least 1 GiB, a local (`l_ssd`) volume,
+  and an `instance_local` Ubuntu image that names the type, since the create
+  sends no volumes and cleanup deletes Instance-API volumes only, so a Block
+  Storage root would be left behind. `shortage` is left out (and is "not
+  available here" for a value entered before, as is `end_of_service`),
+  `scarce` or missing is marked low stock and never suggested. Prices are
+  `hourly_price` × 730 EUR. The image is filled in from the local image that
+  names the chosen type. The read-only check "Instance type" now asks
+  `products/servers?per_page=100&page=N` and, when the type is not on that page
+  while `x-total-count` says more, the next page under step id
+  `<deploymentId>-preflight-<index>-<page>` (`preflightPage` in the state,
+  five pages at most); before, only the first 50 types were read.
+
+A job keeps the bundle it started with, so a 1.0.5 OVHcloud job paused inside
+the settings questions keeps 1.0.5's question order; a new operation started
+from a 1.0.6 setup drops `preflightPage` with the other per-job keys.
+
+Questions name the zone as `{where}` for Scaleway (the region elsewhere). An
+entry's `name` (shown in place of an opaque id), `note` (said last) and `hold`
+(listed, never suggested) apply to any provider's list; when the suggestion is
+not the cheapest listed, the message says "the suggested one first, then
+cheapest first".
+
+Google Cloud, Azure and Oracle Cloud list their settings the same way from
+1.0.6 (every provider now does):
+
+- Google Cloud: `cloudresourcemanager.googleapis.com/v1/projects?filter=lifecycleState%3AACTIVE&pageSize=50`
+  before the project (`pageToken` from `nextPageToken`, three pages at most;
+  `ACTIVE`, labelled `<id> · <name>`). It needs the Cloud Resource Manager API
+  in the key's project, which the guide makes optional: refused, the project is
+  typed. Then `compute/v1/projects/<p>/zones?maxResults=500&fields=...` before
+  Region, which serves the Region and Zone questions both: zones `UP` and not
+  deprecated, grouped by the region they name (`us-*` first, labelled with
+  the region's short name from a static table; the Zone question lists only the
+  chosen region's zones). Then `zones/<z>/machineTypes?maxResults=500&fields=...`
+  before Machine type (three pages at most): x86 (no `ARM64`, `t2a`, `c4a`,
+  `n4a`, `a4x`), no accelerators, not deprecated, families `e2`, `n1`, `n2`,
+  `n2d`, `t2d` (the create names no disk type, and these boot from
+  pd-standard), not custom, 1 to 16 GB, at most 4 vCPU. The phone cannot reach
+  Cloud Billing, so they carry no price: they are ordered by a static rank of
+  us-central1 list prices (`e2-micro`, `e2-small`, `e2-medium`,
+  `t2d-standard-1`, `n1-standard-1`, `e2-standard-2`, `n2d-standard-2`,
+  `n2-standard-2`; others by memory, then vCPU), marked `shared core` where
+  `isSharedCpu`, and `e2-micro` is suggested. Typed, the default stays
+  `e2-small`.
+- Azure: `management.azure.com/subscriptions?api-version=2022-12-01` before the
+  subscription (its `nextLink` followed on that host only, three pages at
+  most; `Enabled` ones by display name, two of the same name told apart by
+  their ID's first 8 characters); `subscriptions/<s>/locations` before Region
+  (`Physical`, type `Region`, category `Recommended` then `Other`, US ones first
+  in each; `Other` ones listed, never suggested and marked `may need
+  approval`, as some need an access request); the checks' own `.../locations/<r>/vmSizes?api-version=2024-07-01`
+  before VM size. The VM-size list says nothing of architecture or Hyper-V
+  generation, so only twelve sizes known to boot the x64 Gen2 image on a
+  Standard SSD are listed, at least 1 GB, in East US list-price order with no
+  price shown: `Standard_B2ats_v2` (suggested), `B2ts_v2`, `B1s`, `B1ms`,
+  `B2als_v2`, `B2ls_v2`, `B2s`, `B2as_v2`, `B2s_v2`, `B2ms`, `D2as_v5`,
+  `D2s_v5`. Typed, the default stays `Standard_B1s`.
+- Oracle Cloud: the credential answer's public `tenancyId` (also under
+  `public`) is kept as `tenancyId` in the state, and the compartment question
+  offers it as "Root compartment"; a new operation drops it. Its identity host
+  (subscribed regions, compartments, availability domains) is not one the key
+  may reach, so the regions are a static list of the 44 commercial (oc1)
+  regions in Oracle's public regions table (2026-11-14; not `ap-delhi-1` or
+  `us-saltlake-2`), of which the list shows 23 main ones. Every lookup goes to `iaas.<region>.oraclecloud.com`, so only for a
+  listed region (a typed one goes into no host name), paged by `opc-next-page`
+  (sent back as `page`, five pages at most):
+  `computeCapacityReservationInstanceShapes?limit=100&compartmentId=<c>` before
+  the availability domain (the domains it names, labelled without the tenancy
+  prefix, the first where `VM.Standard.E4.Flex` is listed suggested; it needs
+  `inspect compute-capacity-reservations`, else 404 and the domain is typed);
+  `shapes?availabilityDomain=<ad>&limit=100&compartmentId=<c>` before the
+  shape (Flex `VM.` shapes allowing 1 OCPU and 2 GB, as the create's fixed
+  `shapeConfig` asks, no GPU or local disks, x86 only; priced from a static
+  table of Oracle's list prices for that size in USD, shown as `~`, labelled
+  `<shape> · ~<price> USD/mo` since every one gets the same size;
+  `VM.Standard.E4.Flex` first among equal prices); and
+  `images?operatingSystem=Canonical%20Ubuntu&operatingSystemVersion=24.04&shape=<s>&lifecycleState=AVAILABLE&sortBy=TIMECREATED&sortOrder=DESC&limit=50&compartmentId=<c>`
+  before the image: Canonical's `Canonical-Ubuntu-24.04[-Minimal][-aarch64]-<date>-<n>`
+  builds for the shape's architecture (aarch64 only for an Arm shape typed
+  after Other), the newest full build (else the newest Minimal) filled in.
+
+Review fixes in 1.0.6, for every provider with lookups:
+
+- The app's voice offers at most 26 choices. A list of other than sizes with
+  more than 23 entries keeps 23: the provider's main regions (a static list
+  per provider for Vultr, Linode, Oracle Cloud, Azure, Google Cloud and
+  OVHcloud), then the first as listed; with the earlier or entered-before
+  answer, the suggestion and Other it stays within 26.
+- A region list read keeps, for the earlier, typed-before and usual regions
+  only, those the provider names but leaves out (DigitalOcean's `available:
+  false`, a Linode outage, a Vultr region with no plan that fits, an Azure
+  logical region, an OVHcloud region not activated, a Google Cloud region with
+  no zone up): one entered before is then "not available here", not selected,
+  and after Other the suggestion is filled in.
+- Typed after an answer that rules out the usual default, a question is
+  prefilled from that answer: a Lightsail zone `<region>a` and a Google Cloud
+  zone `<region>-a` unless the earlier zone is of that region, and an OVHcloud
+  region on the CA or US API site that site's (`BHS5`, `US-EAST-VA-1`).
+- Vultr lists only plans whose `storage_type` names local storage
+  (`local_storage`, `local_and_block_storage`): a VX1 plan on Block Storage
+  alone needs a `block_devices` boot volume the create does not send. The
+  check "Instance plan" refuses one typed after Other.
+- Lightsail marks the opt-in regions `ap-east-1`, `ap-southeast-3`,
+  `ap-southeast-5` and `eu-south-2` (`must be enabled first`), lists them last
+  and never suggests them. A 4xx answer to the zone lookup in one of them asks
+  the region again, the usual one selected, with the reason as the question's
+  error (`invalid_setting`); it never pauses.
+- Account lists (projects, subscriptions, the compartment) select the first
+  by name without the `(suggested)` mark, unless the provider marks one
+  (Scaleway's `default`); two of the same name show their ID's first 8
+  characters (OVHcloud and Scaleway too, as Azure).
+- `names` in the state maps a listed or filled-in answer whose value is an ID
+  to its name (`{size:'d2-2', imageId:'Ubuntu 24.04 · <date>'}`), shown in the
+  review summary as `names` beside `settings`; it is dropped once the review
+  is confirmed and by a new operation. An OVHcloud flavor or image entered
+  before is labelled by the name the read gives it.
+
+For Google Cloud's machine types and Azure's sizes the list read is the zone's
+or region's whole list: an earlier, typed-before or usual value it does not
+name is "not available here". A list value may now be any setting value
+(`[a-zA-Z0-9_.:-]{1,256}`, for OCIDs). `{zone}` in a question is the zone
+answered before. A value typed after Other is kept as entered before even when
+nothing was read yet (Oracle Cloud's compartment and region, Scaleway's zone).
+The read-only checks now refuse a Google Cloud zone whose name does not start
+with the region's, a Google Cloud machine type whose `architecture` is `ARM64`,
+an Azure size with a lower-case `p` among its feature letters (Arm), and an
+Oracle Cloud shape the domain's list gives as fixed (`isFlexible: false`) or
+as not allowing 1 OCPU and 2 GB; before, each failed only at the server's
+create, after the network resources were made.
+
 The VPN Setup bundle implements ten provider adapters plus an existing-server
 path. Its fixtures validate transitions, recovery, deletion and installer
 contracts without paid cloud access. They do not establish that an account's

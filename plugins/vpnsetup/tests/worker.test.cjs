@@ -72,6 +72,8 @@ test('provider and settings questions are single-field and credentials stay opaq
   current=plain(worker.next(current.state,{type:'input',value:{credentialRef:'native-only',token:'never-persist-this'}}));
   assert.ok(!JSON.stringify(current.state).includes('never-persist-this'));
   current=plain(worker.next(current.state,{type:'input',value:{credentialRef:'ssh-ref',publicKey:key}}));
+  // From 1.0.6 its lists are read first; refused, the settings are typed as before.
+  assert.equal(current.state.phase,'catalog');current=result(current,{code:'CLOUD_HTTP_ERROR'},401);
   assert.equal(current.step.fields.length,1);
   for(const value of [{region:'nyc3'},{size:'s-1vcpu-1gb'},{sshCidr:'198.51.100.0/24'}])current=plain(worker.next(current.state,{type:'input',value}));
   assert.equal(current.state.phase,'preflight');
@@ -793,6 +795,8 @@ test('changing the settings re-asks each one with its current value and checks t
   assert.deepEqual(current.state.verified,['Droplet region and size']);
   current=refused(result(current,{image:{}}),/Ubuntu 24\.04 image/);
   current=plain(worker.next(current.state,{type:'input',value:{action:'edit'}}));
+  // Its lists are read again first (1.0.6); refused, each setting is typed with its current value.
+  assert.equal(current.state.phase,'catalog');current=result(current,{code:'CLOUD_HTTP_ERROR'},403);
   assert.equal(current.state.phase,'options');
   const asked=[];
   for(;current.state.phase==='options';){
@@ -1316,7 +1320,7 @@ test('new settings wait until a create that got no answer is looked up, and a de
   current=result(current,{data:[],page:1,pages:1,results:0});
   assert.equal(current.state.creationAbsent,true);assert.deepEqual(plain(current.state.unanswered),{});
   current=plain(worker.next(current.state,{type:'input',value:{action:'edit'}}));
-  assert.equal(current.state.phase,'options');
+  assert.equal(current.state.phase,'catalog'); // Its lists are read first (1.0.6).
   // A delete stopped at its lookup offers neither new settings nor a recreation, and refuses both.
   const kept=plain(worker.next(result(plain(worker.next(state('linode'),{type:'resume'})),opaque,503).state,{type:'input',value:{action:'keep'}})).state;
   let deleting=plain(worker.next(lifecycle('delete',kept).state,{type:'input',value:{approved:true}}));
@@ -2011,10 +2015,11 @@ test('jobs from VPN Setup 1.0.4 keep working: a typed question answered, a recov
   let manual=plain(worker.next({deploymentId:'manual-test',operation:'setup',inputs:{}},{type:'start'}));
   manual=answer(answer(answer(manual,{provider:'hetzner'}),{mode:'manual'}),{credentialRef:'ssh-ref',publicKey:key});
   assert.equal(manual.state.phase,'manual');assert.equal(manual.state.catalogRead,undefined);
-  // Other providers ask as before, typed and titled by the label.
+  // From 1.0.6 every provider reads its own lists first (Azure: its subscriptions); refused, its question is typed, with its own title.
   let other=plain(worker.next({deploymentId:'other-test',operation:'setup',inputs:{}},{type:'start'}));
-  other=answer(answer(answer(answer(other,{provider:'digitalocean'}),{mode:'automatic'}),{credentialRef:'cloud-ref'}),{credentialRef:'ssh-ref',publicKey:key});
-  assert.equal(other.state.phase,'options');assert.equal(other.step.title,'Region');assert.equal(other.step.message,undefined);
+  other=answer(answer(answer(answer(other,{provider:'azure'}),{mode:'automatic'}),{credentialRef:'cloud-ref'}),{credentialRef:'ssh-ref',publicKey:key});
+  assert.equal(other.state.phase,'catalog');other=result(other,{code:'CLOUD_HTTP_ERROR'},403);
+  assert.equal(other.state.phase,'options');assert.equal(other.step.title,'Which Azure subscription should it use?');assert.equal(other.step.fields[0].type,'string');
   // A later operation starts without the setup's catalog, typed answers or progress through them.
   const setup=Object.assign(state('hetzner'),{phase:'ready',host:'203.0.113.7',catalog:{locations:[],types:[]},catalogRead:{at:1},typing:'size',custom:{size:'cpx32'}});
   const deleting=lifecycle('delete',setup);
@@ -2135,4 +2140,1268 @@ test('other credentials entered during a catalog read pause at once with the rea
   // Change server settings reads it again too.
   const edit=answer(plain(worker.next(reading.state,{type:'error',requestId:reading.step.id,code:'CREDENTIAL_CHANGED'})),{action:'edit'});
   assert.equal(edit.state.phase,'catalog');assert.equal(edit.step.id,reading.step.id);
+});
+
+// VPN Setup 1.0.6: Vultr, Linode, DigitalOcean and Lightsail list their settings from read-only lookups sent just before the
+// question that needs them. Bodies: tests/fixtures/<provider>.json, docs-shaped (placeholder entries) and, for Vultr and Linode,
+// their public catalogs as read on 2026-11-14 (trimmed to the fields the worker reads).
+const FIXTURES=Object.fromEntries(['vultr','linode','digitalocean','aws'].map(p=>[p,JSON.parse(fs.readFileSync(path.join(__dirname,'fixtures',p+'.json'),'utf8'))]));
+const VULTR=FIXTURES.vultr,LINODE=FIXTURES.linode,DIGITALOCEAN=FIXTURES.digitalocean,LIGHTSAIL=FIXTURES.aws;
+// A new automatic setup with this provider, up to its first lookup.
+function toLookups(provider,id='lookup-test') {
+  let current=plain(worker.next({deploymentId:id,operation:'setup',inputs:{}},{type:'start'}));
+  for(const value of [{provider},{mode:'automatic'},{credentialRef:'cloud-ref'},{credentialRef:'ssh-ref',publicKey:key}])current=answer(current,value);
+  return current;
+}
+// Answers each lookup until the next question: route(step) gives the body, or [status, body, headers] (a status first: Linode's
+// availability is a bare list). seen collects the steps.
+function lookups(current,route,seen=[]) {
+  while(current.state.phase==='catalog'){
+    const step=current.step;seen.push(step);assert.match(step.id,STEP_ID);
+    if(step.kind==='delay'){current=plain(worker.next(current.state,{type:'result',requestId:step.id,result:{}}));continue;}
+    assert.equal(step.kind,'http');assert.equal(step.auth.credentialRef,current.state.credentialRef);assert.equal(step.reconcile,undefined);
+    if(step.method==='POST')assert.ok(step.readOnly===true&&/^Lightsail_20161128\.Get[A-Za-z]+$/.test(step.headers['X-Amz-Target']),step.url);
+    else {assert.equal(step.method,'GET');assert.equal(step.body,undefined);}
+    const reply=route(step);
+    current=Array.isArray(reply)&&typeof reply[0]==='number'?result(current,reply[1],reply[0],reply[2]?{headers:reply[2]}:{}):result(current,reply);
+  }
+  return current;
+}
+const pairs=step=>step.fields[0].options.map(o=>[o.value,o.label]);
+// Each provider's lookups answered from its fixtures; over: replies by lookup name (the step id's part after "-catalog-").
+const lookupName=step=>/-catalog-([a-z]+)-/.exec(step.id)[1];
+const ROUTES={
+  vultr:{regions:VULTR.regions,plans:VULTR.plans,availability:VULTR.ewr,sizes:VULTR.plans,os:VULTR.os},
+  linode:{regions:LINODE.regions,availability:LINODE.usEast,sizes:LINODE.types},
+  digitalocean:{plans:DIGITALOCEAN.sizes,image:DIGITALOCEAN.image,regions:DIGITALOCEAN.regions,sizes:DIGITALOCEAN.sizes},
+  aws:{regions:LIGHTSAIL.regions,zones:LIGHTSAIL.regions,bundles:LIGHTSAIL.bundles}
+};
+const route=(provider,over={})=>step=>{const name=lookupName(step);return plain(name in over?over[name]:ROUTES[provider][name]);};
+// The settings questions answered in turn (answers by key; {} keeps the preselected one), with lookups answered by respond.
+function settle(current,respond,answers={},asked=[]) {
+  for(let i=0;i<12&&['catalog','options'].includes(current.state.phase);i++){
+    current=lookups(current,respond);
+    if(current.state.phase!=='options')break;
+    asked.push(current.step);const k=current.step.fields[0].key;
+    current=answer(current,k in answers?{[k]:answers[k]}:{});
+  }
+  return current;
+}
+const DEFAULTS={vultr:['ewr','vc2-1c-1gb'],linode:['us-east','g6-nanode-1'],digitalocean:['nyc3','s-1vcpu-1gb'],aws:['us-east-1','micro_3_0']};
+
+test('Vultr lists its regions and plans from its public catalog, cheapest first, and fills in its one Ubuntu 24.04 OS ID',()=>{
+  const seen=[];let current=lookups(toLookups('vultr'),route('vultr'),seen);
+  assert.deepEqual(seen.map(s=>[s.id,s.url]),[['lookup-test-catalog-regions-1','https://api.vultr.com/v2/regions?per_page=500'],
+    ['lookup-test-catalog-plans-1','https://api.vultr.com/v2/plans?per_page=500']]);
+  assert.equal(current.step.title,'Where should the VPN server run?');assert.equal(current.step.fields[0].label,'Region');
+  assert.equal(current.step.message,'Where should the VPN server run? These Vultr regions offer plans with a public IPv4 address. For another one, choose Other.');
+  // The cheapest plan costs 5 USD in ewr and ams, more in sao and hnl: the usual ewr is suggested, first; then by name.
+  assert.deepEqual(pairs(current.step),[['ewr','ewr (suggested) · New Jersey, US'],['ams','ams · Amsterdam, NL'],['hnl','hnl · Honolulu, US'],
+    ['sao','sao · São Paulo, BR'],['(other)','Other (type a value)']]);
+  seen.length=0;current=lookups(answer(current,{}),route('vultr'),seen);
+  assert.deepEqual(seen.map(s=>s.url),['https://api.vultr.com/v2/regions/ewr/availability','https://api.vultr.com/v2/plans?per_page=500']);
+  assert.equal(current.step.title,'Which plan should it use?');assert.equal(current.step.fields[0].label,'Plan');
+  assert.equal(current.step.message,'Which plan should it use? These can be deployed in ewr now, cheapest first. A VPN needs little, so the suggested one is plenty. Prices are per month. For another one, choose Other.');
+  // Not the IPv6-only or 512 MB plans, the VPC-only vhp (no public IP) or the GPU plan.
+  assert.deepEqual(pairs(current.step),[['vc2-1c-1gb','vc2-1c-1gb (suggested) · 5.00 USD/mo · 1 vCPU, 1 GB RAM'],['vhf-1c-1gb','vhf-1c-1gb · 6.00 USD/mo · 1 vCPU, 1 GB RAM'],
+    ['vc2-1c-2gb','vc2-1c-2gb · 10.00 USD/mo · 1 vCPU, 2 GB RAM'],['(other)','Other (type a value)']]);
+  seen.length=0;current=lookups(answer(current,{}),route('vultr'),seen);
+  // One Ubuntu 24.04 x64 OS ID: filled in without asking.
+  assert.deepEqual(seen.map(s=>s.url),['https://api.vultr.com/v2/os?per_page=500']);
+  assert.equal(current.step.fields[0].key,'sshCidr');assert.equal(current.state.inputs.imageId,'2284');
+  assert.equal(current.step.title,'Which addresses may connect over SSH?');
+  assert.ok(JSON.stringify(current.state).length<1500);assert.ok(!/connectivity|location_cost|vpc_only|arch|monthly_cost/.test(JSON.stringify(current.state)));
+  current=answer(current,{});
+  assert.equal(current.state.phase,'preflight');assert.equal(current.state.catalog,undefined);
+  assert.deepEqual(current.state.inputs,{region:'ewr',size:'vc2-1c-1gb',imageId:'2284',sshCidr:'0.0.0.0/0'});
+});
+
+test('Vultr suggests the cheapest plan the region can deploy now, at its own price, and lists several Ubuntu 24.04 IDs newest first',()=>{
+  // vc2 sold out in ewr: the region's own list leaves it out.
+  let current=lookups(answer(lookups(toLookups('vultr'),route('vultr')),{}),route('vultr',{availability:VULTR.ewrSoldOut}));
+  assert.deepEqual(listed(current.step),['vhf-1c-1gb','vc2-1c-2gb','(other)']);assert.equal(current.step.fields[0].default,'vhf-1c-1gb');
+  // sao's own prices.
+  current=lookups(answer(lookups(toLookups('vultr'),route('vultr')),{region:'sao'}),route('vultr',{availability:{available_plans:['vc2-1c-1gb','vhf-1c-1gb','vc2-1c-2gb'],available_vpc_only_plans:[]}}));
+  assert.equal(current.step.fields[0].options[0].label,'vc2-1c-1gb (suggested) · 7.50 USD/mo · 1 vCPU, 1 GB RAM');
+  assert.deepEqual(current.step.fields[0].options.map(o=>o.label.split(' · ')[1]),['7.50 USD/mo','9.00 USD/mo','10.00 USD/mo',undefined]);
+  // Two matches: asked, newest first and suggested.
+  current=lookups(answer(current,{}),route('vultr',{os:VULTR.osTwo}));
+  assert.equal(current.step.title,'Which Ubuntu 24.04 image should it use?');assert.equal(current.step.fields[0].label,'Ubuntu 24.04 OS ID');
+  assert.deepEqual(pairs(current.step),[['9999','9999 (suggested) · Ubuntu 24.04 LTS x64 (example variant)'],['2284','2284 · Ubuntu 24.04 LTS x64'],['(other)','Other (type a value)']]);
+  assert.equal(answer(current,{imageId:'2284'}).state.inputs.imageId,'2284');
+  // None (or the list refused): typed, with no default, as before.
+  for(const os of [{os:[{id:2136,name:'Debian 12 x64',arch:'x64'}]},[503,{code:'CLOUD_HTTP_ERROR'}],[401,{code:'CLOUD_HTTP_ERROR'}]]){
+    const typed=lookups(answer(lookups(answer(lookups(toLookups('vultr'),route('vultr')),{}),route('vultr')),{}),route('vultr',{os}));
+    assert.deepEqual(typed.step.fields,[{key:'imageId',label:'Ubuntu 24.04 OS ID',type:'string',required:true}]);
+    assert.equal(typed.step.message,'Which Ubuntu 24.04 image should it use? Enter the Vultr OS ID of Ubuntu 24.04 LTS x64. The checks before anything is created name it if this one is wrong.');
+  }
+});
+
+test('Vultr\'s and Linode\'s public catalogs as read on 2026-11-14 give their main regions within the voice\'s 26 choices, and the twelve cheapest plans',()=>{
+  const live=VULTR.live;
+  let current=lookups(toLookups('vultr'),route('vultr',{regions:live.regions,plans:live.plans}));
+  // 33 regions: the 23 main ones (by name, as the list goes) and Other; the voice reads at most 26 choices.
+  assert.equal(current.step.fields[0].options.length,24);assert.equal(current.step.fields[0].default,'ewr');
+  assert.deepEqual(listed(current.step),['ewr','ams','atl','bom','cdg','dfw','fra','icn','jnb','lax','lhr','mad','mia','nrt','ord','sao','sea','sgp','sjc','sto','syd','waw','yto','(other)']);
+  current=lookups(answer(current,{}),route('vultr',{plans:live.plans,availability:live.ewr,sizes:live.plans}));
+  assert.equal(current.step.fields[0].options.length,13);
+  assert.deepEqual(listed(current.step).slice(0,5),['vc2-1c-1gb','vhf-1c-1gb','vhp-1c-1gb-amd','vhp-1c-1gb-intel','vc2-1c-2gb']);
+  assert.equal(current.step.fields[0].options[0].label,'vc2-1c-1gb (suggested) · 5.00 USD/mo · 1 vCPU, 1 GB RAM');
+  assert.ok(!listed(current.step).some(v=>/-v6$|free/.test(v)));
+  current=lookups(answer(current,{}),route('vultr',{os:live.os}));
+  assert.equal(current.state.inputs.imageId,'2284');
+  const l=LINODE.live;
+  let linode=lookups(toLookups('linode'),route('linode',{regions:l.regions}));
+  assert.equal(linode.step.fields[0].options.length,24);assert.equal(linode.step.fields[0].options[0].label,'us-east (suggested) · Newark, NJ');
+  assert.ok(!listed(linode.step).includes('us-iad-2')&&listed(linode.step).includes('gb-lon'));
+  linode=lookups(answer(linode,{}),route('linode',{availability:l.usEast,sizes:l.types}));
+  assert.equal(linode.step.fields[0].options.length,13);
+  assert.deepEqual(listed(linode.step).slice(0,4),['g6-nanode-1','g6-standard-1','g6-standard-2','g6-dedicated-2']);
+  assert.equal(linode.step.fields[0].options[0].label,'g6-nanode-1 (suggested) · 5.00 USD/mo · 1 vCPU, 1 GB RAM');
+});
+
+test('Linode lists the regions with Linodes, cloud-init and Cloud Firewalls, then the plans available there now',()=>{
+  const seen=[];let current=lookups(toLookups('linode'),route('linode'),seen);
+  assert.deepEqual(seen.map(s=>s.url),['https://api.linode.com/v4/regions?page_size=500']);
+  // Not us-west (outage), the distributed site, a region without Metadata (cloud-init) or without Linodes.
+  assert.deepEqual(pairs(current.step),[['us-east','us-east (suggested) · Newark, NJ'],['br-gru','br-gru · Sao Paulo, BR'],['us-southeast','us-southeast · Atlanta, GA'],['(other)','Other (type a value)']]);
+  assert.equal(current.step.message,'Where should the VPN server run? These Linode regions can run a new Linode with a Cloud Firewall now. For another one, choose Other.');
+  seen.length=0;current=lookups(answer(current,{}),route('linode'),seen);
+  assert.deepEqual(seen.map(s=>s.url),['https://api.linode.com/v4/regions/us-east/availability','https://api.linode.com/v4/linode/types?page_size=500']);
+  assert.equal(current.step.title,'Which plan should it use?');
+  // Not the premium plan sold out there, or the GPU one.
+  assert.deepEqual(pairs(current.step),[['g6-nanode-1','g6-nanode-1 (suggested) · 5.00 USD/mo · 1 vCPU, 1 GB RAM'],['g6-standard-1','g6-standard-1 · 12.00 USD/mo · 1 vCPU, 2 GB RAM'],
+    ['g6-dedicated-2','g6-dedicated-2 · 36.00 USD/mo · 2 vCPU, 4 GB RAM'],['(other)','Other (type a value)']]);
+  // The Nanode sold out: the next cheapest. br-gru: its own prices.
+  const sold=lookups(answer(lookups(toLookups('linode'),route('linode')),{}),route('linode',{availability:LINODE.usEastSoldOut}));
+  assert.deepEqual(listed(sold.step),['g6-standard-1','g6-dedicated-2','(other)']);
+  const gru=lookups(answer(lookups(toLookups('linode'),route('linode')),{region:'br-gru'}),route('linode',{availability:LINODE.usEast.map(x=>Object.assign({},x,{region:'br-gru'}))}));
+  assert.equal(gru.step.fields[0].options[0].label,'g6-nanode-1 (suggested) · 7.00 USD/mo · 1 vCPU, 1 GB RAM');
+  // The region list refused: typed; the plans are still listed for the region typed. A region Linode does not know: typed plan.
+  const typed=lookups(toLookups('linode'),route('linode',{regions:[429,{code:'CLOUD_HTTP_ERROR'},{'retry-after':'1'}]}));
+  assert.deepEqual(typed.step.fields,[{key:'region',label:'Region',type:'string',required:true,default:'us-east'}]);
+  assert.equal(typed.step.message,'Where should the VPN server run? Enter a Linode region ID, such as us-east, eu-west or ap-south.');
+  seen.length=0;const plans=lookups(answer(typed,{}),route('linode'),seen);
+  assert.equal(plans.step.fields[0].type,'select');assert.equal(plans.step.fields[0].default,'g6-nanode-1');
+  seen.length=0;const unknown=lookups(answer(typed,{region:'xx-none-9'}),route('linode',{availability:[404,{code:'CLOUD_HTTP_ERROR'}]}),seen);
+  assert.deepEqual(seen.map(s=>s.url),['https://api.linode.com/v4/regions/xx-none-9/availability']);
+  assert.deepEqual(unknown.step.fields,[{key:'size',label:'Plan',type:'string',required:true,default:'g6-nanode-1'}]);
+});
+
+test('DigitalOcean lists the regions where a Droplet with cloud-init can be created, then the sizes there, cheapest first',()=>{
+  const seen=[];let current=lookups(toLookups('digitalocean'),route('digitalocean'),seen);
+  assert.deepEqual(seen.map(s=>s.url),['https://api.digitalocean.com/v2/sizes?per_page=200','https://api.digitalocean.com/v2/images/ubuntu-24-04-x64',
+    'https://api.digitalocean.com/v2/regions?per_page=200']);
+  // Not nyc2 (unavailable) or exr9 (no metadata service, which cloud-init needs).
+  assert.deepEqual(pairs(current.step),[['nyc3','nyc3 (suggested) · New York 3'],['ams3','ams3 · Amsterdam 3'],['sfo3','sfo3 · San Francisco 3'],['(other)','Other (type a value)']]);
+  seen.length=0;current=lookups(answer(current,{}),route('digitalocean'),seen);
+  assert.deepEqual(seen.map(s=>s.url),['https://api.digitalocean.com/v2/sizes?per_page=200']);
+  assert.equal(current.step.title,'Which Droplet size should it use?');assert.equal(current.step.fields[0].label,'Droplet size');
+  // Not the 512 MB size, the unavailable one or the GPU one.
+  assert.deepEqual(pairs(current.step),[['s-1vcpu-1gb','s-1vcpu-1gb (suggested) · 6.00 USD/mo · 1 vCPU, 1 GB RAM'],['s-1vcpu-1gb-amd','s-1vcpu-1gb-amd · 7.00 USD/mo · 1 vCPU, 1 GB RAM'],
+    ['s-1vcpu-2gb','s-1vcpu-2gb · 12.00 USD/mo · 1 vCPU, 2 GB RAM'],['s-2vcpu-4gb','s-2vcpu-4gb · 24.00 USD/mo · 2 vCPU, 4 GB RAM'],['(other)','Other (type a value)']]);
+  assert.ok(JSON.stringify(current.state).length<1200);assert.ok(!/features|price_monthly|disk_info/.test(JSON.stringify(current.state)));
+  const sfo3=lookups(answer(lookups(toLookups('digitalocean'),route('digitalocean')),{region:'sfo3'}),route('digitalocean'));
+  assert.equal(sfo3.step.fields[0].default,'s-1vcpu-1gb-amd');
+  // Sizes cut short (a second page): listed, without claiming the cheapest; the usual one is suggested.
+  const part=lookups(answer(lookups(toLookups('digitalocean'),route('digitalocean')),{}),route('digitalocean',{sizes:DIGITALOCEAN.sizesIncomplete}));
+  assert.deepEqual(pairs(part.step),[['s-1vcpu-1gb','s-1vcpu-1gb (suggested) · 6.00 USD/mo · 1 vCPU, 1 GB RAM'],['(other)','Other (type a value)']]);
+  assert.equal(part.step.message,'Which Droplet size should it use? These can be created in nyc3 now. A VPN needs little, so the suggested one is plenty. Prices are per month. For another one, choose Other.');
+  // The token refused (as the phone hands it on): one request, then both settings typed as before.
+  seen.length=0;const refusedToken=lookups(toLookups('digitalocean'),step=>[DIGITALOCEAN.error401.status,DIGITALOCEAN.error401.body],seen);
+  assert.equal(seen.length,1);
+  assert.deepEqual(refusedToken.step.fields,[{key:'region',label:'Region',type:'string',required:true,default:'nyc3'}]);
+  const size=lookups(answer(refusedToken,{}),()=>assert.fail('no lookup'));
+  assert.deepEqual(size.step.fields,[{key:'size',label:'Droplet size',type:'string',required:true,default:'s-1vcpu-1gb'}]);
+  assert.equal(size.step.message,'Which Droplet size should it use? Enter a Droplet size slug with at least 1 GB RAM, such as s-1vcpu-1gb.');
+});
+
+test('a busy provider gets one more try after its Retry-After (at most 10 s), then the question is typed',()=>{
+  const busy=DIGITALOCEAN.error429,seen=[];
+  let tries=0;let current=lookups(toLookups('digitalocean'),step=>lookupName(step)==='plans'&&!tries++?[busy.status,busy.body,busy.headers]:route('digitalocean')(step),seen);
+  assert.deepEqual(seen.map(s=>s.kind==='delay'?['delay',s.id,s.delayMs,s.milliseconds]:[s.id]).slice(0,3),[['lookup-test-catalog-plans-1'],
+    ['delay','lookup-test-catalog-plans-1-wait',10000,10000],['lookup-test-catalog-plans-1-again']]);
+  assert.equal(current.step.fields[0].type,'select');
+  for(const [headers,ms] of [[{},2000],[{'retry-after':'3'},3000],[{'retry-after':'soon'},2000]]){
+    const waits=[];lookups(toLookups('digitalocean'),step=>[503,{code:'CLOUD_HTTP_ERROR'},headers],waits);
+    assert.deepEqual(waits.map(s=>s.kind),['http','delay','http'],JSON.stringify(headers));assert.equal(waits[1].delayMs,ms);
+  }
+  // Busy twice: typed, never paused.
+  const twice=lookups(toLookups('digitalocean'),()=>[429,{code:'CLOUD_HTTP_ERROR'}]);
+  assert.equal(twice.state.phase,'options');assert.equal(twice.state.error,undefined);assert.equal(twice.step.fields[0].type,'string');
+});
+
+test('Lightsail lists regions from us-east-1, then the chosen region\'s zones and bundles with a public IPv4 address',()=>{
+  const seen=[];let current=lookups(toLookups('aws'),route('aws'),seen);
+  assert.deepEqual(seen.map(s=>[s.url,s.method,s.headers['X-Amz-Target'],s.body,s.readOnly]),
+    [['https://lightsail.us-east-1.amazonaws.com/','POST','Lightsail_20161128.GetRegions',{includeAvailabilityZones:false},true]]);
+  assert.equal(seen[0].auth.scheme,'aws');
+  assert.deepEqual(pairs(current.step),[['us-east-1','us-east-1 (suggested) · Virginia'],['us-east-2','us-east-2 · Ohio'],['us-west-2','us-west-2 · Oregon'],
+    ['eu-central-1','eu-central-1 · Frankfurt'],['ap-southeast-3','ap-southeast-3 · Jakarta · must be enabled first'],['(other)','Other (type a value)']]);
+  assert.equal(current.step.message,'Where should the VPN server run? These are the Lightsail regions; those marked must be enabled in your AWS account first. For another one, choose Other.');
+  seen.length=0;current=lookups(answer(current,{region:'eu-central-1'}),route('aws'),seen);
+  assert.deepEqual(seen.map(s=>[s.url,s.headers['X-Amz-Target'],s.body]),[['https://lightsail.eu-central-1.amazonaws.com/','Lightsail_20161128.GetRegions',{includeAvailabilityZones:true}]]);
+  assert.equal(current.step.title,'Which availability zone should it use?');assert.equal(current.step.fields[0].label,'Availability zone');
+  assert.equal(current.step.message,'Which availability zone should it use? These zones are available in eu-central-1 now. For another one, choose Other.');
+  assert.deepEqual(pairs(current.step),[['eu-central-1a','eu-central-1a (suggested)'],['eu-central-1b','eu-central-1b'],['eu-central-1c','eu-central-1c'],['(other)','Other (type a value)']]);
+  // After Other, the usual us-east-1a (not a zone of this region) is not filled in: this region's suggestion is.
+  const other=answer(current,{zone:'(other)'});
+  assert.deepEqual(other.step.fields[0],{key:'zone',label:'Availability zone',type:'string',required:true,default:'eu-central-1a'});
+  assert.equal(other.step.title,'Which zone? Type or say its name, such as eu-central-1a.');
+  assert.equal(other.step.message,'Which availability zone should it use? Enter an availability zone of eu-central-1, such as eu-central-1a.');
+  seen.length=0;current=lookups(answer(current,{zone:'eu-central-1b'}),route('aws'),seen);
+  assert.deepEqual(seen.map(s=>[s.url,s.headers['X-Amz-Target'],s.body]),[['https://lightsail.eu-central-1.amazonaws.com/','Lightsail_20161128.GetBundles',{includeInactive:false}]]);
+  assert.equal(current.step.title,'Which bundle should it use?');
+  // Not the IPv6-only (cheaper, but the setup connects over its static IPv4), Windows, inactive or 0.5 GB bundles.
+  assert.deepEqual(pairs(current.step),[['micro_3_0','micro_3_0 (suggested) · 7.00 USD/mo · 2 vCPU, 1 GB RAM'],['small_3_0','small_3_0 · 12.00 USD/mo · 2 vCPU, 2 GB RAM'],
+    ['medium_3_0','medium_3_0 · 24.00 USD/mo · 2 vCPU, 4 GB RAM'],['c_large_3_0','c_large_3_0 · 42.00 USD/mo · 2 vCPU, 4 GB RAM'],['large_3_0','large_3_0 · 44.00 USD/mo · 2 vCPU, 8 GB RAM'],
+    ['xlarge_3_0','xlarge_3_0 · 84.00 USD/mo · 4 vCPU, 16 GB RAM'],['(other)','Other (type a value)']]);
+  assert.equal(current.step.message,'Which bundle should it use? These Lightsail bundles with a public IPv4 address are offered in eu-central-1, cheapest first. A VPN needs little, so the suggested one is plenty. Prices are per month. For another one, choose Other.');
+  current=answer(answer(current,{}),{});
+  assert.deepEqual(current.state.inputs,{region:'eu-central-1',zone:'eu-central-1b',size:'micro_3_0',sshCidr:'0.0.0.0/0'});
+});
+
+test('Lightsail never sends a lookup to a region typed after Other, and follows bundle pages up to three',()=>{
+  // Rule H: a typo in a typed region would be a DNS failure, which pauses the setup; its zone and bundle are typed instead.
+  let current=answer(lookups(toLookups('aws'),route('aws')),{region:'(other)'});
+  assert.equal(current.step.title,'Which region? Type or say its name, such as us-east-1.');
+  current=answer(current,{region:'eu-west-9'});
+  assert.equal(current.state.phase,'options');
+  // Its zone is prefilled as one of that region (1.0.5 offered us-east-1a, which the checks then refused).
+  assert.deepEqual(current.step.fields,[{key:'zone',label:'Availability zone',type:'string',required:true,default:'eu-west-9a'}]);
+  current=answer(current,{zone:'eu-west-9b'});
+  assert.deepEqual(current.step.fields,[{key:'size',label:'Lightsail bundle',type:'string',required:true,default:'micro_3_0'}]);
+  assert.deepEqual(current.state.custom,{region:'eu-west-9',zone:'eu-west-9b'});
+  // An opt-in region that refuses (most likely not enabled for the account): the region is asked again with why, the usual
+  // one selected (a voice "yes" does not send the same refused lookup again), and nothing pauses. Another one that refuses
+  // or fails: its zone is typed, prefilled as one of that region, and its bundles still read.
+  const optIn=lookups(answer(lookups(toLookups('aws'),route('aws')),{region:'ap-southeast-3'}),route('aws',{zones:[400,{code:'CLOUD_HTTP_ERROR'}]}));
+  assert.equal(optIn.state.phase,'options');assert.equal(optIn.state.error,undefined);assert.equal(optIn.step.fields[0].key,'region');
+  assert.equal(optIn.step.fields[0].default,'us-east-1');assert.equal(optIn.step.fields[0].options[0].value,'us-east-1');assert.equal(optIn.state.inputs.region,undefined);
+  assert.equal(optIn.step.message,'Lightsail did not answer in ap-southeast-3. It is an opt-in region, which may not be enabled for this account: enable it in your AWS account settings, or choose another region.');
+  assert.equal(optIn.step.error.code,'invalid_setting');
+  const retried=[];assert.equal(lookups(answer(optIn,{region:'ap-southeast-3'}),route('aws'),retried).step.fields[0].key,'zone');
+  assert.deepEqual(retried.map(s=>s.id),['lookup-test-catalog-zones-1']);
+  for(const [region,status] of [['eu-central-1',403],['eu-central-1',503],['ap-southeast-3',503]]){
+    const typed=lookups(answer(lookups(toLookups('aws'),route('aws')),{region}),route('aws',{zones:[status,{code:'CLOUD_HTTP_ERROR'}]}));
+    assert.deepEqual(typed.step.fields,[{key:'zone',label:'Availability zone',type:'string',required:true,default:region+'a'}],region+status);
+    assert.equal(lookups(answer(typed,{}),route('aws')).step.fields[0].type,'select');assert.equal(typed.state.custom,undefined);
+  }
+  // Pages: the token is sent back; past three pages, what was read is listed without the cheapest claim.
+  const all=LIGHTSAIL.bundles.bundles,page=(n,token)=>({bundles:all.slice(n*4,n*4+4),...(token?{nextPageToken:token}:{})}),seen=[];
+  let paged=answer(lookups(answer(lookups(toLookups('aws'),route('aws')),{}),route('aws')),{});
+  paged=lookups(paged,step=>page(seen.length-1,'next-'+seen.length),seen);
+  assert.deepEqual(seen.map(s=>[s.id,s.body]),[['lookup-test-catalog-bundles-1',{includeInactive:false}],['lookup-test-catalog-bundles-2',{includeInactive:false,pageToken:'next-1'}],
+    ['lookup-test-catalog-bundles-3',{includeInactive:false,pageToken:'next-2'}]]);
+  assert.deepEqual(listed(paged.step),['micro_3_0','small_3_0','medium_3_0','c_large_3_0','large_3_0','xlarge_3_0','(other)']);
+  assert.doesNotMatch(paged.step.message,/cheapest/);
+});
+
+test('every refused, failed or odd lookup leaves its question typed with the usual default, and never pauses the setup',()=>{
+  const odd=[[401,{code:'CLOUD_HTTP_ERROR'}],[403,{code:'CLOUD_HTTP_ERROR'}],[404,{code:'CLOUD_HTTP_ERROR'}],[400,{code:'CLOUD_HTTP_ERROR'}],[301,{}],
+    [200,null],[200,''],[200,'<html>maintenance</html>'],[200,{}],[200,[]],[200,{regions:{},data:{},plans:{},sizes:'x'}]];
+  for(const provider of ['vultr','linode','digitalocean','aws'])for(const [status,b] of odd){
+    const name=provider+' '+status+' '+JSON.stringify(b);
+    const current=lookups(toLookups(provider),()=>[status,b]);
+    assert.equal(current.state.phase,'options',name);assert.equal(current.state.error,undefined,name);
+    assert.deepEqual(current.step.fields,[{key:'region',label:'Region',type:'string',required:true,default:DEFAULTS[provider][0]}],name);
+    assert.match(current.step.message,/^Where should the VPN server run\? Enter a /,name);
+    // Every question then typed, with its usual default; the answers reach the checks.
+    const done=settle(current,()=>[status,b],{imageId:'2284'});
+    assert.equal(done.state.phase,'preflight',name);assert.equal(done.state.inputs.size,DEFAULTS[provider][1],name);assert.equal(done.state.custom,undefined,name);
+  }
+  // Busy or failing twice (429, 5xx): the same.
+  for(const provider of ['vultr','linode','digitalocean','aws'])for(const status of [429,500,503]){
+    const current=lookups(toLookups(provider),()=>[status,{code:'CLOUD_HTTP_ERROR'}]);
+    assert.equal(current.step.fields[0].type,'string',provider+status);assert.equal(current.state.error,undefined);
+  }
+  // Lists that are empty once filtered: typed.
+  for(const [provider,over] of [['vultr',{regions:{regions:[]}}],['vultr',{plans:{plans:[VULTR.plans.plans[0]]}}],['linode',{regions:{data:[LINODE.regions.data[3]]}}],
+    ['digitalocean',{regions:{regions:[DIGITALOCEAN.regions.regions[3]]}}],['digitalocean',{plans:{sizes:[DIGITALOCEAN.sizes.sizes[0]]}}],['aws',{regions:{regions:[{name:'Not A Region'}]}}]]){
+    const current=lookups(toLookups(provider),route(provider,over));
+    assert.equal(current.step.fields[0].type,'string',provider+JSON.stringify(over).slice(0,40));
+  }
+  for(const [provider,over] of [['vultr',{availability:{available_plans:[],available_vpc_only_plans:[]}}],['linode',{availability:[]}],['digitalocean',{sizes:{sizes:[]}}],
+    ['aws',{zones:{regions:[]}}],['aws',{bundles:{bundles:LIGHTSAIL.bundles.bundles.filter(b=>/ipv6|win/.test(b.bundleId))}}]]){
+    const asked=[],current=settle(toLookups(provider),route(provider,over),{},asked);
+    const key=provider==='aws'&&over.zones?'zone':'size';
+    assert.equal(asked.find(s=>s.fields[0].key===key).fields[0].type,'string',provider+key);assert.equal(current.state.phase,'preflight');
+  }
+  // The lookup cut off (an error event other than other credentials): typed.
+  const cut=plain(worker.next(toLookups('vultr').state,{type:'error',code:'SSH_FAILED'}));
+  assert.equal(cut.state.phase,'options');assert.equal(cut.step.fields[0].type,'string');assert.equal(cut.state.error,undefined);
+  assert.deepEqual(cut.state.catalog.read,{regions:null,plans:null}); // The plans build on the regions: not read either.
+  // A state whose lookup is unreadable goes on to the questions.
+  for(const catalogRead of [null,{},{name:'nothing',page:1},{name:'regions',page:0},{name:'regions',page:'1'}]){
+    const broken=lookups(plain(worker.next(Object.assign(toLookups('linode').state,{catalogRead}),{type:'resume'})),route('linode'));
+    assert.equal(broken.state.phase,'options');
+  }
+});
+
+test('a value typed after Other comes back as entered before, unless the new lists know it cannot be ordered there',()=>{
+  for(const [provider,typed,soldOut,over] of [['vultr','vc2-2c-4gb','vc2-1c-1gb',{availability:VULTR.ewrSoldOut}],['linode','g6-standard-8','g6-nanode-1',{availability:LINODE.usEastSoldOut}],
+    ['digitalocean','s-4vcpu-8gb','s-2vcpu-2gb',{}],['aws','large_2_0','micro_win_3_0',{}]]){
+    const sizeAt=s=>s.fields[0].key==='size';
+    let current=toLookups(provider);const asked=[];
+    // Other on the size question: typed, with its own title; any value the checks then judge.
+    for(;;){current=lookups(current,route(provider));if(sizeAt(current.step))break;current=answer(current,{});}
+    current=answer(current,{size:'(other)'});
+    assert.equal(current.step.fields[0].type,'string');assert.match(current.step.title,/^Which [a-z]+\? Type or say its (ID|slug), such as /,provider);
+    assert.equal(current.state.typing,'size');
+    current=answer(current,{size:typed});assert.deepEqual(current.state.custom,{size:typed},provider);
+    current=settle(current,route(provider));assert.equal(current.state.phase,'preflight');assert.equal(current.state.inputs.size,typed);
+    // A check refuses something; Change server settings reads the lists again and offers the typed value first, selected.
+    current=plain(worker.next(current.state,{type:'result',requestId:current.step.id,result:{status:503,body:{code:'CLOUD_HTTP_ERROR'}}}));
+    current=answer(current,{action:'edit'});assert.equal(current.state.phase,'catalog',provider);
+    for(;;){current=lookups(current,route(provider));if(sizeAt(current.step))break;current=answer(current,{});}
+    assert.deepEqual(current.step.fields[0].options[0],{value:typed,label:typed+' (entered before)'},provider);assert.equal(current.step.fields[0].default,typed);
+    assert.match(current.step.message,/your earlier answer first, then cheapest first/);
+    asked.push(answer(current,{}).state.inputs.size);
+    // A size the provider lists but cannot order there now: offered, not selected.
+    let again=answer(answer(current,{size:'(other)'}),{size:soldOut});
+    again=settle(again,route(provider,over));
+    again=answer(plain(worker.next(again.state,{type:'result',requestId:again.step.id,result:{status:503,body:{code:'CLOUD_HTTP_ERROR'}}})),{action:'edit'});
+    for(;;){again=lookups(again,route(provider,over));if(sizeAt(again.step))break;again=answer(again,{});}
+    const entry=again.step.fields[0].options.find(o=>o.value===soldOut);
+    assert.equal(entry.label,soldOut+' (entered before, not available here)',provider);assert.notEqual(again.step.fields[0].default,soldOut);
+    assert.equal(again.step.fields[0].options[0].value,again.step.fields[0].default);
+    // After Other there, the suggestion is filled in, not the value the lists know cannot be ordered.
+    assert.equal(answer(again,{size:'(other)'}).step.fields[0].default,again.step.fields[0].default,provider);
+    assert.deepEqual(asked,[typed]);asked.length=0;
+  }
+  // The usual default left as it was where a lookup failed is no choice to offer back.
+  const plain1=settle(toLookups('digitalocean'),()=>[403,{code:'CLOUD_HTTP_ERROR'}]);
+  assert.equal(plain1.state.custom,undefined);
+});
+
+test('Change server settings and other credentials read the lists again; other credentials during a lookup pause at once',()=>{
+  // Edit after a refused check: the first lookup again, under the same step id.
+  let current=settle(toLookups('linode'),route('linode'));
+  current=plain(worker.next(current.state,{type:'result',requestId:current.step.id,result:{status:404,body:{code:'CLOUD_HTTP_ERROR'}}}));
+  const edit=answer(current,{action:'edit'});
+  assert.equal(edit.state.phase,'catalog');assert.equal(edit.step.id,'lookup-test-catalog-regions-1');assert.deepEqual(edit.state.catalog,{read:{}});
+  assert.equal(lookups(edit,route('linode')).step.fields[0].default,'us-east');
+  // Other credentials entered for a lookup: paused with the reason; checking again sends the same lookup.
+  const reading=toLookups('vultr');
+  current=plain(worker.next(reading.state,{type:'error',requestId:reading.step.id,code:'CREDENTIAL_CHANGED'}));
+  assert.equal(current.state.phase,'recovery');assert.equal(current.state.interruptedPhase,'catalog');
+  assert.match(current.step.message,/^Other cloud credentials were entered than the ones this step was prepared with/);
+  const again=answer(current,{action:'reconcile'});
+  assert.equal(again.step.id,reading.step.id);assert.equal(again.step.url,reading.step.url);
+  // Update cloud account credentials: the lists read afresh with them.
+  const account=answer(answer(current,{action:'account'}),{credentialRef:'other-ref'});
+  assert.equal(account.state.phase,'catalog');assert.equal(account.step.id,'lookup-test-catalog-regions-1');assert.equal(account.step.auth.credentialRef,'other-ref');
+  // Paused in the middle (a later lookup): the same.
+  const later=lookups(toLookups('aws'),route('aws'));const zones=answer(later,{});
+  assert.equal(zones.step.id,'lookup-test-catalog-zones-1');
+  const paused=plain(worker.next(zones.state,{type:'error',requestId:zones.step.id,code:'CREDENTIAL_CHANGED'}));
+  assert.equal(answer(paused,{action:'retry'}).step.id,'lookup-test-catalog-zones-1');
+  const fresh=answer(answer(paused,{action:'account'}),{credentialRef:'new-ref'});
+  assert.equal(fresh.step.id,'lookup-test-catalog-regions-1');assert.equal(fresh.state.optionIndex,0);
+  // Stopped during a lookup and resumed: the same lookup.
+  const stopped=plain(worker.next(zones.state,{type:'cancel'}));
+  assert.equal(plain(worker.next(stopped.state,{type:'resume'})).step.id,'lookup-test-catalog-zones-1');
+  // A later operation starts without them.
+  const ready=Object.assign(state('vultr'),{phase:'ready',host:'203.0.113.7',catalog:{read:{regions:null}},catalogRead:{name:'os',page:1},custom:{size:'vc2-2c-4gb'}});
+  const deleting=lifecycle('delete',ready);
+  for(const field of ['catalog','catalogRead','custom'])assert.equal(deleting.state[field],undefined,field);
+});
+
+test('each provider\'s suggestions pass its read-only checks and reach the create request unchanged',()=>{
+  const checks={
+    vultr:[VULTR.os,VULTR.plans],linode:[{id:'g6-nanode-1'},{id:'linode/ubuntu24.04'},{status:'ok'}],
+    digitalocean:[DIGITALOCEAN.sizes,DIGITALOCEAN.image],
+    aws:[LIGHTSAIL.bundles,{blueprints:[{blueprintId:'ubuntu_24_04',isActive:true}]},LIGHTSAIL.regions]
+  };
+  const create={vultr:b=>[b.region,b.plan,b.os_id],linode:b=>[b.region,b.type],digitalocean:b=>[b.region,b.size],aws:b=>[b.availabilityZone,b.bundleId]};
+  const expected={vultr:['ewr','vc2-1c-1gb',2284],linode:['us-east','g6-nanode-1'],digitalocean:['nyc3','s-1vcpu-1gb'],aws:['us-east-1a','micro_3_0']};
+  for(const provider of Object.keys(checks)){
+    let current=settle(toLookups(provider),route(provider));
+    assert.equal(current.state.phase,'preflight',provider);
+    for(const b of checks[provider])current=result(current,plain(b));
+    assert.equal(current.step.form,'confirm',provider+' '+JSON.stringify(current.state.error));
+    assert.equal(current.state.verified.length,checks[provider].length);
+    const server=worker.graph(current.state).find(op=>op.key==='server').create;
+    assert.deepEqual(create[provider](server.body),expected[provider],provider);
+    if(provider==='aws')assert.equal(server.url,'https://lightsail.us-east-1.amazonaws.com/');
+  }
+});
+
+test('lookup step ids are valid and distinct, and the lists keep only compact projections, never a provider body',()=>{
+  for(const provider of ['vultr','linode','digitalocean','aws']){
+    const asked=[],done=settle(toLookups(provider,'x'.repeat(64)),route(provider),{},asked);
+    for(const step of asked)assert.match(step.id,STEP_ID);
+    const ids=[];settle(toLookups(provider),step=>{ids.push(step.id);return route(provider)(step);});
+    assert.equal(new Set(ids).size,ids.length,provider);
+    assert.equal(done.state.catalog,undefined);
+  }
+  // The largest list read (Vultr's public catalog: 33 regions) stays small in the state.
+  const live=VULTR.live,big=lookups(toLookups('vultr'),route('vultr',{regions:live.regions,plans:live.plans}));
+  assert.ok(JSON.stringify(big.state.catalog).length<3000,JSON.stringify(big.state.catalog).length);
+  const sizes=lookups(answer(big,{}),route('vultr',{plans:live.plans,availability:live.ewr,sizes:live.plans}));
+  assert.ok(JSON.stringify(sizes.state.catalog).length<6000);
+  assert.ok(!/"(city|connectivity|location_cost|hourly_cost|bandwidth|available_vpc_only_plans)"/.test(JSON.stringify(sizes.state)));
+});
+
+// VPN Setup 1.0.6, OVHcloud and Scaleway. Bodies: tests/fixtures/{ovh,scaleway}.json. OVHcloud's are shaped by its API schemas
+// (placeholder IDs); Scaleway's instance types and stock in fr-par-1 and it-mil-1 are recorded answers (scaleway-cli test
+// cassettes), merged and trimmed to the fields the worker reads, and paged here as Scaleway pages them.
+const OVH=JSON.parse(fs.readFileSync(path.join(__dirname,'fixtures','ovh.json'),'utf8'));
+const SCW=JSON.parse(fs.readFileSync(path.join(__dirname,'fixtures','scaleway.json'),'utf8'));
+const lookupOf=step=>/-catalog-([A-Za-z]+)-/.exec(step.id)[1];
+// A page of a Scaleway products map as asked (per_page, page in the URL), with its x-total-count.
+function scwPage(map,step){
+  const per=Number((/[?&]per_page=([0-9]+)/.exec(step.url)||[0,50])[1]),page=Number((/[?&]page=([0-9]+)/.exec(step.url)||[0,1])[1]),keys=Object.keys(map).sort();
+  return [200,{servers:Object.fromEntries(keys.slice((page-1)*per,page*per).map(k=>[k,map[k]]))},{'x-total-count':String(keys.length)}];
+}
+const B_ROUTES={
+  ovh:{projects:OVH.projects,projectIds:OVH.projectIds,regions:OVH.regions,regionNames:OVH.regionNames,flavors:OVH.flavors,images:OVH.images},
+  scaleway:{projects:SCW.projects,images:SCW.images,types:step=>scwPage(SCW.servers,step),availability:step=>scwPage(SCW.availability,step)}
+};
+const routeB=(provider,over={})=>step=>{const name=lookupOf(step),reply=name in over?over[name]:B_ROUTES[provider][name];return typeof reply==='function'?reply(step):plain(reply);};
+const D2='aaaaaaaa-0000-4000-8000-00000000d202',UBUNTU='bbbbbbbb-0000-4000-8000-0000ubuntu2404',NOBLE='cccccccc-0000-4000-8000-00noblelocal1';
+const PROJECT='0123456789abcdef0123456789abcdef';
+// Every lookup step is a read-only GET to the provider's own API host, never sent with a body or reconciliation.
+const bLookups=(current,respond,seen=[])=>{const at=seen.length;const done=lookups(current,respond,seen);
+  for(const step of seen.slice(at))if(step.kind==='http')assert.match(step.url,/^https:\/\/(eu\.api\.ovh\.com|ca\.api\.ovh\.com|api\.us\.ovhcloud\.com|api\.scaleway\.com)\//);return done;};
+
+test('OVHcloud asks its API account region first, then lists projects, regions and in-stock flavors, and fills in the Ubuntu 24.04 image',()=>{
+  let current=toLookups('ovh');
+  // No lookup before the API account region: every OVHcloud request goes to its host. A fixed list, so no Other.
+  assert.equal(current.state.phase,'options');assert.equal(current.step.title,'Which OVHcloud API site is your account on?');
+  assert.deepEqual(current.step.fields[0],{key:'endpoint',label:'API account region',type:'select',required:true,default:'eu',options:[
+    {value:'eu',label:'EU · Europe (eu.api.ovh.com)'},{value:'ca',label:'CA · Canada, Asia, Oceania (ca.api.ovh.com)'},{value:'us',label:'US · United States (api.us.ovhcloud.com)'}]});
+  assert.equal(current.step.message,'Which OVHcloud API site is your account on? Choose the one where you created the application key: EU for OVHcloud Europe, CA for Canada, Asia and Oceania, US for OVHcloud US.');
+  const seen=[];current=bLookups(answer(current,{}),routeB('ovh'),seen);
+  assert.deepEqual(seen.map(s=>[s.id,s.method,s.url,s.headers['X-Pagination-Size']]),[['lookup-test-catalog-projects-1','GET','https://eu.api.ovh.com/v2/publicCloud/project','100']]);
+  assert.equal(seen[0].auth.scheme,'ovh');
+  // Ready projects; one in discovery mode (no payment method) is listed, never suggested.
+  assert.equal(current.step.title,'Which Public Cloud project should it use?');assert.equal(current.step.fields[0].label,'Public Cloud project ID');
+  assert.equal(current.step.message,'Which Public Cloud project should it use? These are the Public Cloud projects these keys can see. For another one, choose Other.');
+  assert.deepEqual(pairs(current.step),[[PROJECT,'vpn-project'],['fedcba9876543210fedcba9876543210','trial · discovery mode, no payment method'],['(other)','Other (type a value)']]);
+  seen.length=0;current=bLookups(answer(current,{}),routeB('ovh'),seen);
+  assert.deepEqual(seen.map(s=>s.url),['https://eu.api.ovh.com/v2/publicCloud/project/'+PROJECT+'/reference/region']);
+  // Enabled single-zone regions activated for the project: not DE1 (maintenance), WAW1 (not activated), the 3-AZ EU-WEST-PAR
+  // (the create names no zone) or GRA (storage only).
+  assert.deepEqual(pairs(current.step),[['GRA11','GRA11 (suggested) · Gravelines, FR'],['SBG5','SBG5 · Strasbourg, FR'],['(other)','Other (type a value)']]);
+  assert.equal(current.step.message,'Where should the VPN server run? These regions are enabled for the project and take a new instance. For another one, choose Other.');
+  seen.length=0;current=bLookups(answer(current,{}),routeB('ovh'),seen);
+  assert.deepEqual(seen.map(s=>[s.url,s.headers['X-Pagination-Size']]),[['https://eu.api.ovh.com/1.0/cloud/project/'+PROJECT+'/flavor?region=GRA11',undefined]]);
+  assert.equal(current.step.title,'Which flavor should it use?');assert.equal(current.step.fields[0].label,'Flavor ID');
+  // Linux flavors in stock by name and price (the flavor UUID is the value): not c3-4 (sold out), b2-7-flex, Windows or GPU.
+  assert.deepEqual(pairs(current.step),[[D2,'d2-2 (suggested) · ~7.59 EUR/mo · 1 vCPU, 2 GB RAM'],['aaaaaaaa-0000-4000-8000-00000000d204','d2-4 · ~15.04 EUR/mo · 2 vCPU, 4 GB RAM'],
+    ['aaaaaaaa-0000-4000-8000-00000000b308','b3-8 · ~37.38 EUR/mo · 2 vCPU, 8 GB RAM'],['aaaaaaaa-0000-4000-8000-00000000b207','b2-7 · ~51.76 EUR/mo · 2 vCPU, 7 GB RAM'],['(other)','Other (type a value)']]);
+  assert.equal(current.step.message,'Which flavor should it use? These Linux flavors are in stock in GRA11, cheapest first. A VPN needs little, so the suggested one is plenty. Prices are approximate, per month without tax, from OVHcloud\'s price list. For another one, choose Other.');
+  seen.length=0;current=bLookups(answer(current,{}),routeB('ovh'),seen);
+  // One current public Ubuntu 24.04 image (not the deprecated build, 22.04 or the bare-metal one): filled in without asking.
+  assert.deepEqual(seen.map(s=>s.url),['https://eu.api.ovh.com/1.0/cloud/project/'+PROJECT+'/image?osType=linux&region=GRA11']);
+  assert.equal(current.step.fields[0].key,'sshCidr');assert.equal(current.state.inputs.imageId,UBUNTU);
+  assert.ok(JSON.stringify(current.state).length<2500,JSON.stringify(current.state).length);
+  assert.ok(!/planCodes|visibility|resourceStatus|datacenterName|inboundBandwidth|creationDate|"iam"/.test(JSON.stringify(current.state)));
+  current=answer(current,{});
+  assert.equal(current.state.phase,'preflight');assert.equal(current.state.catalog,undefined);
+  assert.deepEqual(current.state.inputs,{endpoint:'eu',projectId:PROJECT,region:'GRA11',size:D2,imageId:UBUNTU,sshCidr:'0.0.0.0/0'});
+});
+
+test('OVHcloud\'s other API sites read their own host, suggest their own region and show prices in their currency',()=>{
+  const regions=[{name:'BHS5',type:'REGION-1-AZ',status:'ENABLED',activated:true,datacenterName:'Beauharnois',country:'CA'},
+    {name:'GRA11',type:'REGION-1-AZ',status:'ENABLED',activated:true,datacenterName:'Gravelines',country:'FR'},
+    {name:'US-EAST-VA-1',type:'REGION-1-AZ',status:'ENABLED',activated:true,datacenterName:'Vint Hill',country:'US'}];
+  for(const [endpoint,host,region,price] of [['ca','ca.api.ovh.com','BHS5','~12.19 CAD/mo'],['us','api.us.ovhcloud.com','US-EAST-VA-1','~9.42 USD/mo']]){
+    const seen=[];let current=bLookups(answer(toLookups('ovh'),{endpoint}),routeB('ovh',{regions}),seen);
+    current=bLookups(answer(current,{}),routeB('ovh',{regions}),seen);
+    assert.equal(current.step.fields[0].default,region,endpoint);assert.equal(current.step.fields[0].options[0].value,region);
+    current=bLookups(answer(current,{}),routeB('ovh',{regions}),seen);
+    assert.equal(current.step.fields[0].options[0].label,'d2-2 (suggested) · '+price+' · 1 vCPU, 2 GB RAM',endpoint);
+    assert.ok(seen.every(s=>s.url.startsWith('https://'+host+'/')),endpoint);
+  }
+});
+
+test('OVHcloud reads its v1 lists when v2 is refused, follows v2 cursors, and never suggests a flavor without a price or quota',()=>{
+  // The v2 project list refused (the key lacks GET /publicCloud/project): v1's IDs, labelled by ID.
+  const seen=[];let current=bLookups(answer(toLookups('ovh'),{}),routeB('ovh',{projects:[403,{code:'CLOUD_HTTP_ERROR'}]}),seen);
+  assert.deepEqual(seen.map(s=>s.url),['https://eu.api.ovh.com/v2/publicCloud/project','https://eu.api.ovh.com/1.0/cloud/project']);
+  assert.equal(seen[1].headers['X-Pagination-Size'],undefined);
+  assert.deepEqual(pairs(current.step),[[PROJECT,PROJECT],['fedcba9876543210fedcba9876543210','fedcba9876543210fedcba9876543210'],['(other)','Other (type a value)']]);
+  // Both refused: typed, with no default, as before.
+  const typed=bLookups(answer(toLookups('ovh'),{}),()=>[403,{code:'CLOUD_HTTP_ERROR'}]);
+  assert.deepEqual(typed.step.fields,[{key:'projectId',label:'Public Cloud project ID',type:'string',required:true}]);
+  assert.equal(typed.step.message,'Which Public Cloud project should it use? Enter the ID of your Public Cloud project: 32 letters and digits, shown under the project name in the OVHcloud Control Panel.');
+  // The v2 region route (BETA) gone: v1's names, by their form (not GRA, a storage name, or the 3-AZ EU-WEST-PAR).
+  seen.length=0;current=bLookups(answer(current,{}),routeB('ovh',{regions:[404,{code:'CLOUD_HTTP_ERROR'}]}),seen);
+  assert.deepEqual(seen.map(s=>s.url),['https://eu.api.ovh.com/v2/publicCloud/project/'+PROJECT+'/reference/region','https://eu.api.ovh.com/1.0/cloud/project/'+PROJECT+'/region']);
+  assert.deepEqual(listed(current.step),['GRA11','DE1','GRA7','SBG5','UK1','WAW1','(other)']);
+  assert.equal(current.step.fields[0].options[0].label,'GRA11 (suggested)');
+  // v2 answering, but with nothing usable (its BETA shape changed, say): v1 too.
+  const shape=bLookups(answer(bLookups(answer(toLookups('ovh'),{}),routeB('ovh')),{}),routeB('ovh',{regions:OVH.regions.map(r=>Object.assign({},r,{type:undefined}))}));
+  assert.deepEqual(listed(shape.step),['GRA11','DE1','GRA7','SBG5','UK1','WAW1','(other)']);
+  // v2 pages by a cursor header, sent back as a request header; each page under its own step id.
+  const cursor=[];let paged=answer(toLookups('ovh'),{});
+  paged=bLookups(paged,step=>lookupOf(step)==='projects'&&!step.headers['X-Pagination-Cursor']?[200,[OVH.projects[1]],{'x-pagination-cursor-next':'cursor-2'}]:
+    lookupOf(step)==='projects'?[200,[OVH.projects[0]]]:routeB('ovh')(step),cursor);
+  assert.deepEqual(cursor.map(s=>[s.id,s.headers['X-Pagination-Cursor']]),[['lookup-test-catalog-projects-1',undefined],['lookup-test-catalog-projects-2','cursor-2']]);
+  assert.deepEqual(listed(paged.step),[PROJECT,'fedcba9876543210fedcba9876543210','(other)']);
+  // A flavor whose quota is used up is listed with that note, one with no known price after the priced ones; neither suggested.
+  const flavors=OVH.flavors.map(f=>f.name==='d2-2'?Object.assign({},f,{quota:0}):f).concat([Object.assign({},OVH.flavors[0],{id:'aaaaaaaa-0000-4000-8000-0000000b4008',name:'b4-8',ram:8000,vcpus:2})]);
+  let flavor=bLookups(answer(bLookups(answer(paged,{}),routeB('ovh')),{}),routeB('ovh',{flavors}));
+  assert.deepEqual(pairs(flavor.step),[['aaaaaaaa-0000-4000-8000-00000000d204','d2-4 (suggested) · ~15.04 EUR/mo · 2 vCPU, 4 GB RAM'],[D2,'d2-2 · ~7.59 EUR/mo · 1 vCPU, 2 GB RAM · quota full'],
+    ['aaaaaaaa-0000-4000-8000-00000000b308','b3-8 · ~37.38 EUR/mo · 2 vCPU, 8 GB RAM'],['aaaaaaaa-0000-4000-8000-00000000b207','b2-7 · ~51.76 EUR/mo · 2 vCPU, 7 GB RAM'],
+    ['aaaaaaaa-0000-4000-8000-0000000b4008','b4-8 · 2 vCPU, 8 GB RAM'],['(other)','Other (type a value)']]);
+  assert.match(flavor.step.message,/in stock in GRA11, the suggested one first, then cheapest first\./);
+  // RAM given in MB is read as GB.
+  assert.ok(pairs(flavor.step).some(p=>p[1]==='b4-8 · 2 vCPU, 8 GB RAM'));
+  // Two current Ubuntu 24.04 images: asked, newest first; an image for another flavor type is not listed.
+  const images=OVH.images.concat([Object.assign({},OVH.images[0],{id:'bbbbbbbb-0000-4000-8000-00000ubuntu2404b',creationDate:'2026-08-01T09:00:00Z'}),
+    Object.assign({},OVH.images[0],{id:'bbbbbbbb-0000-4000-8000-00000ubuntu2404g',creationDate:'2026-11-01T09:00:00Z',flavorType:'ovh.ssd.gpu2'})]);
+  const image=bLookups(answer(flavor,{}),routeB('ovh',{images}));
+  assert.equal(image.step.title,'Which Ubuntu 24.04 image should it use?');assert.equal(image.step.fields[0].label,'Ubuntu 24.04 image ID');
+  assert.deepEqual(pairs(image.step),[[UBUNTU,'Ubuntu 24.04 (suggested) · 2026-10-02'],['bbbbbbbb-0000-4000-8000-00000ubuntu2404b','Ubuntu 24.04 · 2026-08-01'],['(other)','Other (type a value)']]);
+  assert.equal(image.step.message,'Which Ubuntu 24.04 image should it use? These are OVHcloud\'s Ubuntu 24.04 images in GRA11; the newest is suggested. For another one, choose Other.');
+  // None: typed with no default.
+  const none=bLookups(answer(flavor,{}),routeB('ovh',{images:OVH.images.filter(x=>!/Ubuntu 24/.test(x.name)||x.status!=='active'||x.flavorType)}));
+  assert.deepEqual(none.step.fields,[{key:'imageId',label:'Ubuntu 24.04 image ID',type:'string',required:true}]);
+});
+
+test('every refused, failed or odd OVHcloud or Scaleway lookup leaves its question typed as before and never pauses the setup',()=>{
+  const odd=[[401,{code:'CLOUD_HTTP_ERROR'}],[403,{code:'CLOUD_HTTP_ERROR'}],[404,{code:'CLOUD_HTTP_ERROR'}],[400,{code:'CLOUD_HTTP_ERROR'}],[429,{code:'CLOUD_HTTP_ERROR'}],
+    [500,{code:'CLOUD_HTTP_ERROR'}],[503,{code:'CLOUD_HTTP_ERROR'}],[200,null],[200,''],[200,'<html>maintenance</html>'],[200,{}],[200,[]],[200,{servers:[],projects:{},local_images:'x'}]];
+  const typedKeys={ovh:['projectId','region','size','imageId'],scaleway:['projectId','size','imageId']};
+  for(const provider of ['ovh','scaleway'])for(const [status,b] of odd){
+    const name=provider+' '+status+' '+JSON.stringify(b),asked=[];
+    const typedAnswers=provider==='ovh'?{projectId:PROJECT,size:D2,imageId:UBUNTU}:{projectId:'3f1c2b4a-5d6e-4f70-8a9b-0c1d2e3f4a5b',imageId:NOBLE};
+    const done=settle(toLookups(provider),()=>[status,b],typedAnswers,asked);
+    assert.equal(done.state.phase,'preflight',name);assert.equal(done.state.error,undefined,name);
+    // Typed where a list was read but empty, a value counts as entered before (as for Hetzner); the usual defaults never do.
+    assert.ok(Object.values(done.state.custom||{}).every(v=>Object.values(typedAnswers).includes(v)),name);
+    for(const key of typedKeys[provider]){const step=asked.find(s=>s.fields[0].key===key);assert.equal(step.fields[0].type,'string',name+' '+key);assert.doesNotMatch(step.message,/choose Other/,name);}
+    // The fixed lists stay lists: OVHcloud's API sites, Scaleway's zones.
+    assert.equal(asked.find(s=>s.fields[0].key===(provider==='ovh'?'endpoint':'zone')).fields[0].type,'select',name);
+    // The answers typed (and the usual defaults) reach the checks; none counts as entered before (nothing was listed).
+    assert.deepEqual(done.state.inputs,Object.assign(provider==='ovh'?{endpoint:'eu',region:'GRA11'}:{zone:'fr-par-1',size:'DEV1-S'},typedAnswers,{sshCidr:'0.0.0.0/0'}),name);
+  }
+  // Each lookup failing alone types only the questions it feeds.
+  for(const [provider,lookup,key] of [['ovh','flavors','size'],['ovh','images','imageId'],['scaleway','projects','projectId'],['scaleway','images','size'],
+    ['scaleway','types','size'],['scaleway','availability','size']])for(const reply of [[403,{code:'CLOUD_HTTP_ERROR'}],[503,{code:'CLOUD_HTTP_ERROR'}],[200,null]]){
+    const asked=[],done=settle(toLookups(provider),routeB(provider,{[lookup]:reply}),provider==='ovh'?{size:D2,imageId:UBUNTU}:{size:'DEV1-S',imageId:NOBLE,projectId:'3f1c2b4a-5d6e-4f70-8a9b-0c1d2e3f4a5b'},asked);
+    assert.equal(done.state.phase,'preflight',provider+' '+lookup+' '+JSON.stringify(reply)+' '+JSON.stringify(done.step.fields)+done.state.optionProblem);
+    for(const step of asked)assert.equal(step.fields[0].type,step.fields[0].key===key||provider==='scaleway'&&lookup!=='projects'&&step.fields[0].key==='imageId'||
+      step.fields[0].key==='sshCidr'?'string':'select',provider+' '+lookup+' '+step.fields[0].key);
+  }
+  // Lists empty once filtered: typed.
+  for(const [provider,over,key] of [['ovh',{projects:[OVH.projects[0]].map(p=>Object.assign({},p,{resourceStatus:'SUSPENDED'}))},'projectId'],
+    ['ovh',{regions:OVH.regions.filter(r=>r.status!=='ENABLED'||!r.activated||r.type!=='REGION-1-AZ'),regionNames:['GRA','EU-WEST-PAR','GRA-LZ-1']},'region'],
+    ['ovh',{flavors:OVH.flavors.filter(f=>!f.available||f.osType!=='linux'||/flex|^t2/.test(f.name))},'size'],
+    ['scaleway',{images:{local_images:SCW.images.local_images.filter(x=>x.type==='instance_sbs'),total_count:1}},'size'],
+    ['scaleway',{availability:step=>scwPage(Object.fromEntries(Object.keys(SCW.availability).map(k=>[k,{availability:'shortage'}])),step)},'size']]){
+    const asked=[];settle(toLookups(provider),routeB(provider,over),{},asked);
+    assert.equal(asked.find(s=>s.fields[0].key===key).fields[0].type,'string',provider+' '+key);
+  }
+  // Busy once: one more try after the wait, then listed.
+  let tries=0;const waits=[];const busy=bLookups(answer(toLookups('ovh'),{}),step=>!tries++?[429,{code:'CLOUD_HTTP_ERROR'},{'retry-after':'4'}]:routeB('ovh')(step),waits);
+  assert.deepEqual(waits.slice(0,3).map(s=>[s.kind,s.id]),[['http','lookup-test-catalog-projects-1'],['delay','lookup-test-catalog-projects-1-wait'],['http','lookup-test-catalog-projects-1-again']]);
+  assert.equal(waits[1].delayMs,4000);assert.equal(busy.step.fields[0].type,'select');
+});
+
+test('Scaleway lists its projects and zones, then x86 types with a local disk in stock in the zone, and fills in the local-disk Ubuntu 24.04 image',()=>{
+  const seen=[];let current=bLookups(toLookups('scaleway'),routeB('scaleway'),seen);
+  assert.deepEqual(seen.map(s=>[s.id,s.url]),[['lookup-test-catalog-projects-1','https://api.scaleway.com/account/v3/projects?page_size=100&order_by=name_asc']]);
+  assert.equal(seen[0].auth.scheme,'scaleway');
+  assert.equal(current.step.title,'Which Scaleway project should it use?');assert.equal(current.step.fields[0].label,'Project UUID');
+  // The one named default is suggested.
+  assert.deepEqual(pairs(current.step),[['3f1c2b4a-5d6e-4f70-8a9b-0c1d2e3f4a5b','default (suggested)'],['7a8b9c0d-1e2f-4a3b-8c4d-5e6f7a8b9c0d','vpn · VPN servers'],['(other)','Other (type a value)']]);
+  // The zones: a fixed list, no request.
+  seen.length=0;current=bLookups(answer(current,{}),routeB('scaleway'),seen);
+  assert.equal(seen.length,0);assert.equal(current.step.title,'Where should the VPN server run?');assert.equal(current.step.fields[0].label,'Zone');
+  assert.deepEqual(listed(current.step),['fr-par-1','fr-par-2','fr-par-3','nl-ams-1','nl-ams-2','nl-ams-3','pl-waw-1','pl-waw-2','pl-waw-3','it-mil-1','(other)']);
+  assert.deepEqual(current.step.fields[0].options.slice(0,4).map(o=>o.label),['fr-par-1 (suggested) · Paris, FR','fr-par-2 · Paris, FR','fr-par-3 · Paris, FR','nl-ams-1 · Amsterdam, NL']);
+  assert.equal(current.step.message,'Where should the VPN server run? These are the Scaleway zones for Instances. For another one, choose Other.');
+  // Before the type: the zone's local-disk Ubuntu 24.04 image, its types and stock, 100 a page while x-total-count says more.
+  seen.length=0;current=bLookups(answer(current,{}),routeB('scaleway'),seen);
+  assert.deepEqual(seen.map(s=>[s.id,s.url]),[
+    ['lookup-test-catalog-images-1','https://api.scaleway.com/marketplace/v2/local-images?image_label=ubuntu_noble&zone=fr-par-1&arch=x86_64&page_size=100'],
+    ['lookup-test-catalog-types-1','https://api.scaleway.com/instance/v1/zones/fr-par-1/products/servers?per_page=100&page=1'],
+    ['lookup-test-catalog-types-2','https://api.scaleway.com/instance/v1/zones/fr-par-1/products/servers?per_page=100&page=2'],
+    ['lookup-test-catalog-availability-1','https://api.scaleway.com/instance/v1/zones/fr-par-1/products/servers/availability?per_page=100&page=1'],
+    ['lookup-test-catalog-availability-2','https://api.scaleway.com/instance/v1/zones/fr-par-1/products/servers/availability?per_page=100&page=2']]);
+  assert.equal(current.step.title,'Which instance type should it use?');assert.equal(current.step.fields[0].label,'Commercial type');
+  // Not STARDUST1-S (sold out there), START1/VC1/X64 (end of service), PLAY2/PRO2/POP2 (no local disk), RENDER-S (GPU) or Arm.
+  assert.deepEqual(pairs(current.step),[['DEV1-S','DEV1-S (suggested) · 6.55 EUR/mo · 2 vCPU, 2 GB RAM'],['DEV1-M','DEV1-M · 14.74 EUR/mo · 3 vCPU, 4 GB RAM'],
+    ['DEV1-L','DEV1-L · 31.27 EUR/mo · 4 vCPU, 8 GB RAM'],['DEV1-XL','DEV1-XL · 47.51 EUR/mo · 4 vCPU, 12 GB RAM'],['GP1-XS','GP1-XS · 67.76 EUR/mo · 4 vCPU, 16 GB RAM'],
+    ['GP1-S','GP1-S · 139.24 EUR/mo · 8 vCPU, 32 GB RAM'],['GP1-M','GP1-M · 279.97 EUR/mo · 16 vCPU, 64 GB RAM'],['GP1-L','GP1-L · 565.15 EUR/mo · 32 vCPU, 128 GB RAM'],
+    ['GP1-XL','GP1-XL · 1221.89 EUR/mo · 48 vCPU, 256 GB RAM'],['(other)','Other (type a value)']]);
+  assert.equal(current.step.message,'Which instance type should it use? These x86 types with a local disk can be ordered in fr-par-1 now, cheapest first. A VPN needs little, so the suggested one is plenty. Prices are per month without VAT. For another one, choose Other.');
+  // Its one local-disk Ubuntu 24.04 image: filled in without asking (no further request).
+  seen.length=0;current=bLookups(answer(current,{}),routeB('scaleway'),seen);
+  assert.equal(seen.length,0);assert.equal(current.step.fields[0].key,'sshCidr');assert.equal(current.state.inputs.imageId,NOBLE);
+  assert.ok(JSON.stringify(current.state).length<2500,JSON.stringify(current.state).length);
+  assert.ok(!/hourly_price|per_volume_constraint|compatible_commercial_types|organization_id|instance_sbs|"availability":"/.test(JSON.stringify(current.state)));
+  current=answer(current,{});
+  assert.equal(current.state.phase,'preflight');assert.equal(current.state.catalog,undefined);
+  assert.deepEqual(current.state.inputs,{projectId:'3f1c2b4a-5d6e-4f70-8a9b-0c1d2e3f4a5b',zone:'fr-par-1',size:'DEV1-S',imageId:NOBLE,sshCidr:'0.0.0.0/0'});
+});
+
+test('Scaleway lists types low on stock without suggesting them, and types a zone with no local-disk type or image',()=>{
+  const toSize=(over,zone)=>bLookups(answer(answer(bLookups(toLookups('scaleway'),routeB('scaleway',over)),{}),zone?{zone}:{}),routeB('scaleway',over));
+  const stock=change=>({availability:step=>scwPage(Object.assign({},SCW.availability,change),step)});
+  // DEV1-S scarce: listed with a note, DEV1-M suggested and first.
+  let current=toSize(stock({'DEV1-S':{availability:'scarce'}}));
+  assert.deepEqual(pairs(current.step).slice(0,3),[['DEV1-M','DEV1-M (suggested) · 14.74 EUR/mo · 3 vCPU, 4 GB RAM'],['DEV1-S','DEV1-S · 6.55 EUR/mo · 2 vCPU, 2 GB RAM · low stock'],
+    ['DEV1-L','DEV1-L · 31.27 EUR/mo · 4 vCPU, 8 GB RAM']]);
+  assert.match(current.step.message,/now, the suggested one first, then cheapest first\./);
+  // Not in the stock list at all: the same.
+  const missing=Object.assign({},SCW.availability);delete missing['DEV1-S'];
+  assert.equal(toSize({availability:step=>scwPage(missing,step)}).step.fields[0].default,'DEV1-M');
+  // STARDUST1-S in stock: the cheapest.
+  current=toSize(stock({'STARDUST1-S':{availability:'available'}}));
+  assert.equal(current.step.fields[0].options[0].label,'STARDUST1-S (suggested) · 0.44 EUR/mo · 1 vCPU, 1 GB RAM');
+  // Everything low on stock: the usual DEV1-S is suggested.
+  current=toSize({availability:step=>scwPage(Object.fromEntries(Object.keys(SCW.availability).map(k=>[k,{availability:'scarce'}])),step)});
+  assert.equal(current.step.fields[0].default,'DEV1-S');assert.match(current.step.fields[0].options[0].label,/low stock$/);
+  // it-mil-1 has no local-disk type: typed, and so is the image (nothing to pick it from).
+  const mil={images:{local_images:[Object.assign({},SCW.images.local_images[0],{zone:'it-mil-1',compatible_commercial_types:['POP2-2C-8G']})],total_count:1},
+    types:step=>scwPage(SCW.milServers,step),availability:step=>scwPage(SCW.milAvailability,step)};
+  const seen=[];current=bLookups(answer(answer(bLookups(toLookups('scaleway'),routeB('scaleway',mil)),{}),{zone:'it-mil-1'}),routeB('scaleway',mil),seen);
+  assert.ok(seen[0].url.includes('zone=it-mil-1'));assert.ok(seen[1].url.startsWith('https://api.scaleway.com/instance/v1/zones/it-mil-1/'));
+  assert.deepEqual(current.step.fields,[{key:'size',label:'Commercial type',type:'string',required:true,default:'DEV1-S'}]);
+  assert.equal(current.step.message,'Which instance type should it use? Enter an x86 Scaleway instance type with a local disk, such as DEV1-S.');
+  current=bLookups(answer(current,{size:'BASIC3-X2C-4G'}),routeB('scaleway',mil));
+  assert.deepEqual(current.step.fields,[{key:'imageId',label:'Ubuntu 24.04 image UUID',type:'string',required:true}]);
+  assert.equal(current.step.message,'Which Ubuntu 24.04 image should it use? Enter the UUID of an Ubuntu 24.04 x86_64 image in it-mil-1, from the Instance images list, not a marketplace product ID.');
+  // No local-disk Ubuntu 24.04 image (only Block Storage ones): the types are not read; both typed.
+  seen.length=0;current=toSize({images:{local_images:SCW.images.local_images.filter(x=>x.type==='instance_sbs'),total_count:1}});
+  current=plain(current);assert.equal(current.step.fields[0].type,'string');
+  // Projects paged by their total count.
+  const projects=[];const paged=bLookups(toLookups('scaleway'),step=>/page=2/.test(step.url)?{projects:[SCW.projects.projects[1]],total_count:2}:
+    lookupOf(step)==='projects'?{projects:[SCW.projects.projects[0]],total_count:2}:routeB('scaleway')(step),projects);
+  assert.deepEqual(projects.map(s=>s.url),['https://api.scaleway.com/account/v3/projects?page_size=100&order_by=name_asc','https://api.scaleway.com/account/v3/projects?page_size=100&order_by=name_asc&page=2']);
+  assert.equal(paged.step.fields[0].options.length,3);
+});
+
+test('Scaleway\'s checks read further pages of instance types while x-total-count says more',()=>{
+  const all=SCW.servers,page=step=>{const r=scwPage(all,step);return {status:r[0],body:r[1],headers:r[2]};};
+  const check=(size,respond)=>{let current=preflighting('scaleway',{size},1);const ids=[];
+    while(current.state.phase==='preflight'){ids.push([current.step.id,current.step.url]);const r=respond(current.step);current=plain(worker.next(current.state,{type:'result',requestId:current.step.id,result:r}));}
+    return {current,ids};};
+  // STARDUST1-S is among the first 100 (alphabetically), VC1S on the second page.
+  let {current,ids}=check('STARDUST1-S',page);
+  assert.equal(current.step.form,'confirm');assert.deepEqual(ids,[['test-deployment-123-preflight-1','https://api.scaleway.com/instance/v1/zones/fr-par-1/products/servers?per_page=100&page=1']]);
+  ({current,ids}=check('VC1S',page));
+  assert.equal(current.step.form,'confirm');assert.equal(current.state.preflightPage,undefined);
+  assert.deepEqual(ids.map(x=>x[0]),['test-deployment-123-preflight-1','test-deployment-123-preflight-1-2']);assert.match(ids[1][1],/per_page=100&page=2$/);
+  assert.deepEqual(current.state.verified,['Instance type']);
+  // In no page: refused once the pages run out; without a total, after the first.
+  ({current,ids}=check('NOPE1-S',page));
+  assert.equal(ids.length,2);refused(current,'Scaleway has no instance type NOPE1-S in fr-par-1.');
+  ({current,ids}=check('VC1S',step=>({status:200,body:page(step).body})));
+  assert.equal(ids.length,1);refused(current,'Scaleway has no instance type VC1S in fr-par-1.');
+  // A later page refused pauses; checking again starts that check from its first page.
+  ({current,ids}=check('VC1S',step=>/page=2/.test(step.url)?{status:503,body:{code:'CLOUD_HTTP_ERROR'}}:page(step)));
+  refused(current,/^Instance type could not be verified \(HTTP 503/);assert.equal(current.state.preflightPage,undefined);
+  const again=answer(current,{action:'retry'});assert.equal(again.step.id,'test-deployment-123-preflight-1');
+  // Five pages at most.
+  const endless=step=>({status:200,body:{servers:{['X'+step.url.slice(-1)]:{}}},headers:{'x-total-count':'999'}});
+  ({current,ids}=check('START1-S',endless));
+  assert.equal(ids.length,5);refused(current,'Scaleway has no instance type START1-S in fr-par-1.');
+});
+
+test('OVHcloud and Scaleway: a value typed after Other comes back as entered before, unless the new lists know it cannot be ordered there',()=>{
+  const B4='aaaaaaaa-0000-4000-8000-0000000b4016',C34='aaaaaaaa-0000-4000-8000-00000000c304';
+  for(const [provider,typed,soldOut] of [['ovh',B4,C34],['scaleway','PRO2-XXS','START1-S']]){
+    const sizeAt=s=>s.fields[0].key==='size',respond=routeB(provider);
+    let current=toLookups(provider);
+    for(;;){current=bLookups(current,respond);if(sizeAt(current.step))break;current=answer(current,{});}
+    current=answer(current,{size:'(other)'});
+    assert.equal(current.step.fields[0].type,'string');assert.equal(current.state.typing,'size');
+    assert.equal(current.step.title,provider==='ovh'?'Which flavor ID? Type or say it.':'Which instance type? Type or say its name, such as DEV1-S.');
+    current=answer(current,{size:typed});assert.deepEqual(current.state.custom,{size:typed},provider);
+    current=settle(current,respond,{imageId:'11111111-2222-4333-8444-555555555555'});assert.equal(current.state.phase,'preflight');assert.equal(current.state.inputs.size,typed);
+    // Change server settings: the lists read again; the typed value first, selected.
+    current=answer(plain(worker.next(current.state,{type:'result',requestId:current.step.id,result:{status:503,body:{code:'CLOUD_HTTP_ERROR'}}})),{action:'edit'});
+    for(;;){current=bLookups(current,respond);if(sizeAt(current.step))break;current=answer(current,{});}
+    assert.deepEqual(current.step.fields[0].options[0],{value:typed,label:typed+' (entered before)'},provider);assert.equal(current.step.fields[0].default,typed);
+    assert.match(current.step.message,/your earlier answer first, then cheapest first/);
+    // One the lists know cannot be ordered there (sold out; end of service): offered, not selected; after Other, the suggestion.
+    let again=settle(answer(answer(current,{size:'(other)'}),{size:soldOut}),respond,{imageId:'11111111-2222-4333-8444-555555555555'});
+    again=answer(plain(worker.next(again.state,{type:'result',requestId:again.step.id,result:{status:503,body:{code:'CLOUD_HTTP_ERROR'}}})),{action:'edit'});
+    for(;;){again=bLookups(again,respond);if(sizeAt(again.step))break;again=answer(again,{});}
+    const entry=again.step.fields[0].options.find(o=>o.value===soldOut);
+    // Shown by the name the lists know (an OVHcloud flavor's UUID as c3-4), so the status is not cut off after a long ID.
+    assert.equal(entry.label,(provider==='ovh'?'c3-4':soldOut)+' (entered before, not available here)',provider);assert.notEqual(again.step.fields[0].default,soldOut);
+    assert.equal(again.step.fields[0].options[0].value,again.step.fields[0].default);
+    assert.equal(answer(again,{size:'(other)'}).step.fields[0].default,again.step.fields[0].default,provider);
+  }
+  // A project typed after Other on OVHcloud: its lists are read with it, and a refusal leaves them typed.
+  let current=answer(bLookups(answer(toLookups('ovh'),{}),routeB('ovh')),{projectId:'(other)'});
+  assert.equal(current.step.title,'Which project? Type or say its ID.');
+  const seen=[];current=bLookups(answer(current,{projectId:'ffffffffffffffffffffffffffffffff'}),()=>[404,{code:'CLOUD_HTTP_ERROR'}],seen);
+  assert.deepEqual(seen.map(s=>s.url),['https://eu.api.ovh.com/v2/publicCloud/project/ffffffffffffffffffffffffffffffff/reference/region','https://eu.api.ovh.com/1.0/cloud/project/ffffffffffffffffffffffffffffffff/region']);
+  assert.deepEqual(current.step.fields,[{key:'region',label:'Cloud region',type:'string',required:true,default:'GRA11'}]);
+});
+
+test('OVHcloud and Scaleway: Change server settings and other credentials read the lists again; other credentials during a lookup pause',()=>{
+  // OVHcloud: the API site is asked again first (no request), then the project list again under the same step id.
+  let current=settle(answer(toLookups('ovh'),{endpoint:'ca'}),routeB('ovh'));
+  current=answer(plain(worker.next(current.state,{type:'result',requestId:current.step.id,result:{status:404,body:{code:'CLOUD_HTTP_ERROR'}}})),{action:'edit'});
+  assert.equal(current.state.phase,'options');assert.equal(current.step.fields[0].key,'endpoint');assert.equal(current.step.fields[0].default,'ca');
+  // Its earlier answer is selected and listed first (a voice "yes" takes the first choice), with no Other on this fixed list.
+  assert.deepEqual(listed(current.step),['ca','eu','us']);
+  const seen=[];current=bLookups(answer(current,{endpoint:'eu'}),routeB('ovh'),seen);
+  assert.deepEqual(seen.map(s=>[s.id,s.url]),[['lookup-test-catalog-projects-1','https://eu.api.ovh.com/v2/publicCloud/project']]);
+  // Scaleway: other credentials during the type lookups pause at once; Update cloud account credentials starts the lists over.
+  let at=answer(bLookups(toLookups('scaleway'),routeB('scaleway')),{});at=answer(at,{});
+  assert.equal(at.state.phase,'catalog');assert.equal(at.step.id,'lookup-test-catalog-images-1');
+  const paused=plain(worker.next(at.state,{type:'error',requestId:at.step.id,code:'CREDENTIAL_CHANGED'}));
+  assert.equal(paused.state.phase,'recovery');assert.match(paused.step.message,/^Other cloud credentials were entered/);
+  assert.equal(answer(paused,{action:'retry'}).step.id,'lookup-test-catalog-images-1');
+  const fresh=answer(answer(paused,{action:'account'}),{credentialRef:'new-ref'});
+  assert.equal(fresh.step.id,'lookup-test-catalog-projects-1');assert.equal(fresh.step.auth.credentialRef,'new-ref');assert.deepEqual(fresh.state.catalog,{read:{}});
+});
+
+test('OVHcloud\'s and Scaleway\'s suggestions pass their read-only checks and reach the create request unchanged',()=>{
+  const flavorCheck=OVH.flavors,imageCheck=OVH.images;
+  let current=settle(toLookups('ovh'),routeB('ovh'));
+  assert.equal(current.state.phase,'preflight');
+  assert.match(current.step.url,/\/image\?region=GRA11$/);current=result(current,plain(imageCheck));
+  assert.match(current.step.url,/\/flavor\?region=GRA11$/);current=result(current,plain(flavorCheck));
+  assert.equal(current.step.form,'confirm',JSON.stringify(current.state.error));
+  let server=worker.graph(current.state).find(op=>op.key==='server').create;
+  assert.equal(server.url,'https://eu.api.ovh.com/v2/publicCloud/project/'+PROJECT+'/compute/instance');
+  assert.deepEqual([server.body.targetSpec.location.region,server.body.targetSpec.flavor.id,server.body.targetSpec.image.id],['GRA11',D2,UBUNTU]);
+  current=settle(toLookups('scaleway'),routeB('scaleway'));
+  assert.match(current.step.url,/\/zones\/fr-par-1\/images\/cccccccc-0000-4000-8000-00noblelocal1$/);
+  current=result(current,{image:{id:NOBLE,arch:'x86_64',name:'Ubuntu 24.04 Noble Numbat',root_volume:{volume_type:'l_ssd'}}});
+  const r=scwPage(SCW.servers,current.step);current=result(current,r[1],200,{headers:r[2]});
+  assert.equal(current.step.form,'confirm',JSON.stringify(current.state.error));
+  server=worker.graph(current.state).find(op=>op.key==='server').create;
+  assert.equal(server.url,'https://api.scaleway.com/instance/v1/zones/fr-par-1/servers');
+  assert.deepEqual([server.body.project,server.body.commercial_type,server.body.image],['3f1c2b4a-5d6e-4f70-8a9b-0c1d2e3f4a5b','DEV1-S',NOBLE]);
+});
+
+test('OVHcloud and Scaleway lookup step ids are valid and distinct, and only compact projections stay in the state',()=>{
+  for(const provider of ['ovh','scaleway']){
+    const ids=[],asked=[];const done=settle(toLookups(provider,'x'.repeat(64)),step=>{ids.push(step.id);return routeB(provider)(step);},{},asked);
+    for(const id of ids.concat(asked.map(s=>s.id)))assert.match(id,STEP_ID);
+    assert.equal(new Set(ids).size,ids.length,provider);assert.equal(done.state.catalog,undefined);
+    // Each select's preselected answer is listed first and is a valid setting; Other is last and never stored.
+    for(const step of asked)if(step.fields[0].options){const o=step.fields[0].options;assert.equal(o[0].value,step.fields[0].default);
+      if(step.fields[0].key!=='endpoint')assert.equal(o[o.length-1].value,'(other)');assert.ok(o.every(x=>x.label.length<=90&&!/[<>\u0000-\u001f]/.test(x.label)));}
+    assert.ok(!Object.values(done.state.inputs).includes('(other)'));
+  }
+  // The largest catalog kept: Scaleway's types and stock for fr-par-1.
+  const big=bLookups(answer(answer(bLookups(toLookups('scaleway'),routeB('scaleway')),{}),{}),routeB('scaleway'));
+  assert.ok(JSON.stringify(big.state.catalog).length<2000,JSON.stringify(big.state.catalog).length);
+  // Hostile names are cut and stripped of markup and control characters.
+  const hostile=[Object.assign({},OVH.projects[0],{currentState:{name:'<b>x</b>‮\u0007'+'y'.repeat(60),mode:'CLASSIC'}})];
+  const shown=bLookups(answer(toLookups('ovh'),{}),routeB('ovh',{projects:hostile}));
+  assert.equal(shown.step.fields[0].options[0].label,'bx/b '+'y'.repeat(27));
+});
+
+// VPN Setup 1.0.6, Google Cloud, Azure and Oracle Cloud. Bodies: tests/fixtures/{gcp,azure,oci}.json, shaped by each API's
+// documented models with placeholder ids. None of the three gives prices the phone can read: Google Cloud's and Azure's sizes
+// are ordered by a static list-price rank, Oracle Cloud's priced from a static table.
+const [GCP,AZURE,OCI]=['gcp','azure','oci'].map(p=>JSON.parse(fs.readFileSync(path.join(__dirname,'fixtures',p+'.json'),'utf8')));
+const TENANCY='ocid1.tenancy.oc1..aaaaaaaaexampletenancyexampletenancy';
+const OCI_IMAGE_ID='ocid1.image.oc1.iad.aaaaaaaaexampleubuntu2404amd64x20260918',SUB='aaaa0001-0000-4000-8000-000000000a05';
+const C_ROUTES={gcp:{projects:GCP.projects,zones:GCP.zones,types:GCP.types},azure:{subscriptions:AZURE.subscriptions,regions:AZURE.locations,sizes:AZURE.sizes},
+  oci:{domains:OCI.domains,shapes:OCI.shapes,images:OCI.images}};
+const routeC=(provider,over={})=>step=>{const name=lookupOf(step),reply=name in over?over[name]:C_ROUTES[provider][name];return typeof reply==='function'?reply(step):plain(reply);};
+// Oracle Cloud's credential answer carries its public fields (the tenancy OCID among them), as the phone's form returns them.
+function toLookupsC(provider,id='lookup-test',credential) {
+  let current=plain(worker.next({deploymentId:id,operation:'setup',inputs:{}},{type:'start'}));
+  const cred=credential||(provider==='oci'?{credentialRef:'cloud-ref',tenancyId:TENANCY,userId:'ocid1.user.oc1..aaaaaaaaexampleuser',public:{tenancyId:TENANCY}}:{credentialRef:'cloud-ref'});
+  for(const value of [{provider},{mode:'automatic'},cred,{credentialRef:'ssh-ref',publicKey:key}])current=answer(current,value);
+  return current;
+}
+// Every lookup step is a read-only GET to the provider's own API host (Oracle Cloud's: the chosen region's).
+const HOSTS={gcp:/^https:\/\/(compute|cloudresourcemanager)\.googleapis\.com\//,azure:/^https:\/\/management\.azure\.com\//,oci:/^https:\/\/iaas\.[a-z0-9-]+\.oraclecloud\.com\/20160918\//};
+const cLookups=(provider,current,respond,seen=[])=>{const at=seen.length;const done=lookups(current,respond,seen);
+  for(const step of seen.slice(at))if(step.kind==='http'){assert.match(step.url,HOSTS[provider]);assert.equal(step.auth.scheme,provider);}return done;};
+const C_DEFAULTS={gcp:{region:'us-central1',zone:'us-central1-a',size:'e2-small'},azure:{region:'eastus',size:'Standard_B1s'},oci:{region:'us-ashburn-1',size:'VM.Standard.E4.Flex'}};
+
+test('Google Cloud lists projects, then its regions and their zones from one zone list, then x86 machine types in a list-price order',()=>{
+  const seen=[];let current=cLookups('gcp',toLookupsC('gcp'),routeC('gcp'),seen);
+  assert.deepEqual(seen.map(s=>[s.id,s.url]),[['lookup-test-catalog-projects-1','https://cloudresourcemanager.googleapis.com/v1/projects?filter=lifecycleState%3AACTIVE&pageSize=50']]);
+  assert.equal(current.step.title,'Which Google Cloud project should it use?');assert.equal(current.step.fields[0].label,'Project ID');
+  assert.equal(current.step.message,'Which Google Cloud project should it use? These are the projects this service account can see. For another one, choose Other.');
+  // By ID, its display name after it when it differs.
+  assert.deepEqual(pairs(current.step),[['sandbox-7f3a','sandbox-7f3a'],['vpn-project-123456','vpn-project-123456 · VPN Project'],['(other)','Other (type a value)']]);
+  seen.length=0;current=cLookups('gcp',answer(current,{projectId:'vpn-project-123456'}),routeC('gcp'),seen);
+  assert.deepEqual(seen.map(s=>[s.id,s.url]),[['lookup-test-catalog-zones-1',
+    'https://compute.googleapis.com/compute/v1/projects/vpn-project-123456/zones?maxResults=500&fields=items(name%2Cstatus%2Cregion%2Cdeprecated%2Fstate)%2CnextPageToken']]);
+  // Regions with a zone up and not deleted (not us-east2), us-* first; the usual us-central1 suggested.
+  assert.equal(current.step.title,'Where should the VPN server run?');assert.equal(current.step.fields[0].label,'Region');
+  assert.deepEqual(pairs(current.step),[['us-central1','us-central1 (suggested) · Iowa'],['us-east1','us-east1 · South Carolina'],['us-west1','us-west1 · Oregon'],
+    ['asia-southeast3','asia-southeast3 · Bangkok'],['europe-west1','europe-west1 · Belgium'],['(other)','Other (type a value)']]);
+  // The zones come from the same list: no request; only the chosen region's zones that are up (not us-west1-b).
+  seen.length=0;current=cLookups('gcp',answer(current,{region:'us-west1'}),routeC('gcp'),seen);
+  assert.equal(seen.length,0);assert.equal(current.step.title,'Which zone should it use?');assert.equal(current.step.fields[0].label,'Zone');
+  assert.equal(current.step.message,'Which zone should it use? These zones of us-west1 are up now. For another one, choose Other.');
+  assert.deepEqual(pairs(current.step),[['us-west1-a','us-west1-a (suggested)'],['us-west1-c','us-west1-c'],['(other)','Other (type a value)']]);
+  // After Other, the usual us-central1-a (a zone of another region) is not filled in: this region's suggestion is.
+  const other=answer(current,{zone:'(other)'});
+  assert.deepEqual(other.step.fields[0],{key:'zone',label:'Zone',type:'string',required:true,default:'us-west1-a'});
+  assert.equal(other.step.title,'Which zone? Type or say its name, such as us-central1-a.');
+  assert.equal(other.step.message,'Which zone should it use? Enter a zone of us-west1: its name is the region\'s and a letter, such as us-central1-a in us-central1.');
+  seen.length=0;current=cLookups('gcp',answer(current,{zone:'us-west1-c'}),routeC('gcp'),seen);
+  assert.deepEqual(seen.map(s=>[s.id,s.url]),[['lookup-test-catalog-types-1','https://compute.googleapis.com/compute/v1/projects/vpn-project-123456/zones/us-west1-c/machineTypes?maxResults=500'+
+    '&fields=items(name%2CguestCpus%2CmemoryMb%2CisSharedCpu%2Carchitecture%2Caccelerators%2Cdeprecated%2Fstate)%2CnextPageToken']]);
+  assert.equal(current.step.title,'Which machine type should it use?');assert.equal(current.step.fields[0].label,'Machine type');
+  assert.equal(current.step.message,'Which machine type should it use? These x86 machine types are offered in us-west1-c, cheapest first. A VPN needs little, so the suggested one is plenty. '+
+    'Google Cloud\'s API gives no prices; its pricing page has them. For another one, choose Other.');
+  // Not Arm (t2a), GPU (a2), deprecated (m1), outside e2/n1/n2/n2d/t2d (c3, f1, g1) or under 1 GB; no prices, the rank's order.
+  assert.deepEqual(pairs(current.step),[['e2-micro','e2-micro (suggested) · 2 vCPU, 1 GB RAM · shared core'],['e2-small','e2-small · 2 vCPU, 2 GB RAM · shared core'],
+    ['e2-medium','e2-medium · 2 vCPU, 4 GB RAM · shared core'],['t2d-standard-1','t2d-standard-1 · 1 vCPU, 4 GB RAM'],['n1-standard-1','n1-standard-1 · 1 vCPU, 3.75 GB RAM'],
+    ['e2-standard-2','e2-standard-2 · 2 vCPU, 8 GB RAM'],['n2d-standard-2','n2d-standard-2 · 2 vCPU, 8 GB RAM'],['n2-standard-2','n2-standard-2 · 2 vCPU, 8 GB RAM'],
+    ['n1-standard-2','n1-standard-2 · 2 vCPU, 7.5 GB RAM'],['n2-standard-4','n2-standard-4 · 4 vCPU, 16 GB RAM'],['(other)','Other (type a value)']]);
+  assert.ok(JSON.stringify(current.state).length<2000,JSON.stringify(current.state).length);
+  assert.ok(!/memoryMb|guestCpus|isSharedCpu|accelerators|lifecycleState|googleapis\.com\/compute\/v1\/projects\/vpn-project-123456\/regions/.test(JSON.stringify(current.state)));
+  current=answer(answer(current,{}),{});
+  assert.equal(current.state.phase,'preflight');assert.equal(current.state.catalog,undefined);
+  assert.deepEqual(current.state.inputs,{projectId:'vpn-project-123456',region:'us-west1',zone:'us-west1-c',size:'e2-micro',sshCidr:'0.0.0.0/0'});
+});
+
+test('Azure lists enabled subscriptions, the subscription\'s physical regions recommended first, then x64 sizes from its own VM-size list',()=>{
+  const seen=[];let current=cLookups('azure',toLookupsC('azure'),routeC('azure'),seen);
+  assert.deepEqual(seen.map(s=>[s.id,s.url]),[['lookup-test-catalog-subscriptions-1','https://management.azure.com/subscriptions?api-version=2022-12-01']]);
+  assert.equal(current.step.title,'Which Azure subscription should it use?');assert.equal(current.step.fields[0].label,'Subscription ID');
+  // Not the disabled one; two of the same name are told apart by their ID's start.
+  assert.deepEqual(pairs(current.step),[[SUB,'Pay-As-You-Go · aaaa0001'],['bbbb0002-0000-4000-8000-000000000d71','Pay-As-You-Go · bbbb0002'],['(other)','Other (type a value)']]);
+  seen.length=0;current=cLookups('azure',answer(current,{}),routeC('azure'),seen);
+  assert.deepEqual(seen.map(s=>s.url),['https://management.azure.com/subscriptions/'+SUB+'/locations?api-version=2022-12-01']);
+  // Not the logical "unitedstates" or the edge zone; recommended ones first, then US ones; others listed, never suggested, and
+  // marked, as some of them need an access request.
+  assert.deepEqual(pairs(current.step),[['eastus','eastus (suggested) · East US'],['eastus2','eastus2 · East US 2'],['westeurope','westeurope · West Europe'],
+    ['northcentralus','northcentralus · North Central US · may need approval'],['francesouth','francesouth · France South · may need approval'],['(other)','Other (type a value)']]);
+  assert.equal(current.step.message,'Where should the VPN server run? These are the subscription\'s regions, Azure\'s recommended ones first; those marked may need an access request first. For another one, choose Other.');
+  seen.length=0;current=cLookups('azure',answer(current,{}),routeC('azure'),seen);
+  assert.deepEqual(seen.map(s=>s.url),['https://management.azure.com/subscriptions/'+SUB+'/providers/Microsoft.Compute/locations/eastus/vmSizes?api-version=2024-07-01']);
+  assert.equal(current.step.title,'Which VM size should it use?');assert.equal(current.step.fields[0].label,'VM size');
+  // Only the sizes known to boot the x64 Gen2 image on a Standard SSD, in East US list-price order: not B1ls (0.5 GB), Arm
+  // (B2pts_v2, D2ps_v5), Gen1 A1_v2 or the GPU size.
+  assert.deepEqual(listed(current.step),['Standard_B2ats_v2','Standard_B2ts_v2','Standard_B1s','Standard_B1ms','Standard_B2als_v2','Standard_B2ls_v2','Standard_B2s',
+    'Standard_B2as_v2','Standard_B2s_v2','Standard_B2ms','Standard_D2as_v5','Standard_D2s_v5','(other)']);
+  assert.equal(current.step.fields[0].options[0].label,'Standard_B2ats_v2 (suggested) · 2 vCPU, 1 GB RAM');
+  assert.equal(current.step.message,'Which VM size should it use? These x64 sizes are offered in eastus, cheapest first. A VPN needs little, so the suggested one is plenty. '+
+    'Azure\'s API gives no prices; its pricing page has them. For another one, choose Other.');
+  assert.ok(JSON.stringify(current.state).length<2000,JSON.stringify(current.state).length);
+  assert.ok(!/osDiskSizeInMB|memoryInMB|regionCategory|geographyGroup|availabilityZoneMappings|"state"/.test(JSON.stringify(current.state)));
+  current=answer(current,{});
+  assert.deepEqual(current.state.inputs,{subscriptionId:SUB,region:'eastus',size:'Standard_B2ats_v2'});
+  // A region list with only others: listed, the first one suggested.
+  const others=cLookups('azure',answer(cLookups('azure',toLookupsC('azure'),routeC('azure')),{}),routeC('azure',{regions:{value:AZURE.locations.value.filter(x=>x.metadata.regionCategory!=='Recommended')}}));
+  assert.deepEqual(listed(others.step),['northcentralus','francesouth','(other)']);
+  // More subscriptions on a next page: its nextLink is followed on Azure's host only, twice at most.
+  const pages=[];let n=0;
+  cLookups('azure',toLookupsC('azure'),step=>lookupOf(step)!=='subscriptions'?routeC('azure')(step):{value:[Object.assign({},AZURE.subscriptions.value[0],{subscriptionId:'00000000-0000-4000-8000-00000000000'+n,displayName:'S'+n})],
+    nextLink:'https://management.azure.com/subscriptions?api-version=2022-12-01&%24skiptoken=t'+(++n)},pages);
+  assert.deepEqual(pages.map(s=>[s.id,s.url]),[['lookup-test-catalog-subscriptions-1','https://management.azure.com/subscriptions?api-version=2022-12-01'],
+    ['lookup-test-catalog-subscriptions-2','https://management.azure.com/subscriptions?api-version=2022-12-01&%24skiptoken=t1'],
+    ['lookup-test-catalog-subscriptions-3','https://management.azure.com/subscriptions?api-version=2022-12-01&%24skiptoken=t2']]);
+  for(const nextLink of ['https://evil.example/subscriptions?x=1','http://management.azure.com/subscriptions?p=2','https://management.azure.com@evil.example/x']){
+    const one=[];const done=cLookups('azure',toLookupsC('azure'),step=>({value:AZURE.subscriptions.value,nextLink}),one);
+    assert.equal(one.length,1,nextLink);assert.equal(done.step.fields[0].type,'select');
+  }
+});
+
+test('Oracle Cloud offers the tenancy\'s root compartment and its regions, then availability domains, x86 Flex shapes and the newest Ubuntu image',()=>{
+  // No lookup before the compartment: the tenancy OCID comes with the credential answer (a public field).
+  let current=toLookupsC('oci');
+  assert.equal(current.state.phase,'options');assert.equal(current.state.tenancyId,TENANCY);
+  assert.equal(current.step.title,'Which compartment should it use?');assert.equal(current.step.fields[0].label,'Compartment OCID');
+  assert.deepEqual(pairs(current.step),[[TENANCY,'Root compartment'],['(other)','Other (type a value)']]);
+  assert.equal(current.step.message,'Which compartment should it use? The root compartment is the whole tenancy; a dedicated one keeps the VPN\'s resources apart. For another one, choose Other.');
+  // The regions: Oracle's static commercial list (its identity host is not one the key may reach), us-ashburn-1 suggested;
+  // its 44 regions are more than the voice's 26 choices, so the 23 main ones and Other. None Oracle's regions table leaves out.
+  current=answer(current,{});
+  assert.equal(current.step.fields[0].options.length,24);
+  assert.ok(!current.step.fields[0].options.some(o=>['ap-delhi-1','us-saltlake-2'].includes(o.value)));assert.deepEqual(current.step.fields[0].options[0],{value:'us-ashburn-1',label:'us-ashburn-1 (suggested) · Ashburn, US'});
+  assert.ok(current.step.fields[0].options.some(o=>o.value==='eu-frankfurt-1'&&o.label==='eu-frankfurt-1 · Frankfurt, DE'));
+  const seen=[];current=cLookups('oci',answer(current,{}),routeC('oci'),seen);
+  assert.deepEqual(seen.map(s=>[s.id,s.url]),[['lookup-test-catalog-domains-1',
+    'https://iaas.us-ashburn-1.oraclecloud.com/20160918/computeCapacityReservationInstanceShapes?limit=100&compartmentId='+TENANCY]]);
+  // Labelled without the tenancy prefix; the first where E4 Flex can be reserved is suggested.
+  assert.equal(current.step.title,'Which availability domain should it use?');assert.equal(current.step.fields[0].label,'Availability domain');
+  assert.deepEqual(pairs(current.step),[['Uocm:US-ASHBURN-AD-1','US-ASHBURN-AD-1 (suggested)'],['Uocm:US-ASHBURN-AD-2','US-ASHBURN-AD-2'],['Uocm:US-ASHBURN-AD-3','US-ASHBURN-AD-3'],['(other)','Other (type a value)']]);
+  seen.length=0;current=cLookups('oci',answer(current,{zone:'Uocm:US-ASHBURN-AD-2'}),routeC('oci'),seen);
+  assert.deepEqual(seen.map(s=>s.url),['https://iaas.us-ashburn-1.oraclecloud.com/20160918/shapes?availabilityDomain=Uocm%3AUS-ASHBURN-AD-2&limit=100&compartmentId='+TENANCY]);
+  // The create asks for 1 OCPU and 2 GB: Flex x86 shapes only (not the fixed E2.1.Micro or GPU shape, Arm A1, or DenseIO with
+  // 8 OCPU at least); E4 first at E3's price, as the usual one.
+  assert.equal(current.step.title,'Which shape should it use?');assert.equal(current.step.fields[0].label,'Flex shape');
+  assert.deepEqual(pairs(current.step),[['VM.Standard.E4.Flex','VM.Standard.E4.Flex (suggested) · ~20.44 USD/mo'],
+    ['VM.Standard.E3.Flex','VM.Standard.E3.Flex · ~20.44 USD/mo'],['VM.Standard.E5.Flex','VM.Standard.E5.Flex · ~24.82 USD/mo'],
+    ['VM.Standard3.Flex','VM.Standard3.Flex · ~31.39 USD/mo'],['(other)','Other (type a value)']]);
+  assert.equal(current.step.message,'Which shape should it use? These x86 Flex shapes can run with 1 OCPU and 2 GB RAM in this availability domain, cheapest first. A VPN needs little, so the suggested one is plenty. '+
+    'Prices are approximate, per month in USD for 1 OCPU and 2 GB RAM, from Oracle\'s price list; the boot volume is extra. For another one, choose Other.');
+  // The newest full Ubuntu 24.04 build for that shape (not Minimal, not older): filled in without asking.
+  seen.length=0;current=cLookups('oci',answer(current,{}),routeC('oci'),seen);
+  assert.deepEqual(seen.map(s=>s.url),['https://iaas.us-ashburn-1.oraclecloud.com/20160918/images?operatingSystem=Canonical%20Ubuntu&operatingSystemVersion=24.04&shape=VM.Standard.E4.Flex'+
+    '&lifecycleState=AVAILABLE&sortBy=TIMECREATED&sortOrder=DESC&limit=50&compartmentId='+TENANCY]);
+  assert.equal(current.step.fields[0].key,'sshCidr');assert.equal(current.state.inputs.imageId,OCI_IMAGE_ID);
+  assert.ok(JSON.stringify(current.state).length<2500,JSON.stringify(current.state).length);
+  assert.ok(!/processorDescription|ocpuOptions|memoryOptions|instanceShape|displayName|timeCreated|userId/.test(JSON.stringify(current.state)));
+  current=answer(current,{});
+  assert.equal(current.state.phase,'preflight');assert.equal(current.state.catalog,undefined);
+  assert.deepEqual(current.state.inputs,{compartmentId:TENANCY,region:'us-ashburn-1',zone:'Uocm:US-ASHBURN-AD-2',size:'VM.Standard.E4.Flex',imageId:OCI_IMAGE_ID,sshCidr:'0.0.0.0/0'});
+});
+
+test('Oracle Cloud never sends a lookup to a region typed after Other, and an Arm shape typed after Other gets its aarch64 image',()=>{
+  // Rule H: a typed region goes into no host name (a typo there is a DNS failure, which pauses the setup).
+  let current=answer(answer(toLookupsC('oci'),{}),{region:'(other)'});
+  assert.equal(current.step.title,'Which region? Type or say its identifier, such as us-ashburn-1.');
+  current=answer(current,{region:'xx-newregion-1'});
+  assert.equal(current.state.phase,'options');assert.deepEqual(current.state.catalog.read,{domains:null});
+  assert.deepEqual(current.step.fields,[{key:'zone',label:'Availability domain',type:'string',required:true}]);
+  current=answer(current,{zone:'Abcd:XX-NEWREGION-1-AD-1'});
+  assert.deepEqual(current.step.fields,[{key:'size',label:'Flex shape',type:'string',required:true,default:'VM.Standard.E4.Flex'}]);
+  current=answer(current,{});
+  assert.deepEqual(current.step.fields,[{key:'imageId',label:'Ubuntu 24.04 amd64 image OCID',type:'string',required:true}]);
+  assert.equal(current.step.message,'Which Ubuntu 24.04 image should it use? Enter the OCID of a Canonical Ubuntu 24.04 image in xx-newregion-1 (amd64 for an x86 shape), from the console\'s image list.');
+  assert.deepEqual(current.state.custom,{region:'xx-newregion-1'});
+  // The availability-domain list refused (the guide's policy lacks inspect compute-capacity-reservations): typed, with no
+  // default; the shapes are still listed for the domain typed.
+  const seen=[];current=cLookups('oci',answer(answer(toLookupsC('oci'),{}),{}),routeC('oci',{domains:[404,{code:'CLOUD_HTTP_ERROR'}]}),seen);
+  assert.deepEqual(current.step.fields,[{key:'zone',label:'Availability domain',type:'string',required:true}]);
+  assert.equal(current.step.message,'Which availability domain should it use? Enter the full availability domain name with its prefix, such as Uocm:US-ASHBURN-AD-1, as the console\'s instance page shows it.');
+  current=cLookups('oci',answer(current,{zone:'Uocm:US-ASHBURN-AD-3'}),routeC('oci'),seen);
+  assert.equal(current.step.fields[0].type,'select');assert.equal(current.step.fields[0].default,'VM.Standard.E4.Flex');
+  // Arm only after Other: the image list is asked for that shape, and only an aarch64 build fits it.
+  current=answer(answer(current,{size:'(other)'}),{size:'VM.Standard.A1.Flex'});
+  current=cLookups('oci',current,routeC('oci',{images:OCI.images.concat(OCI.armImages)}),seen);
+  assert.match(seen[seen.length-1].url,/shape=VM\.Standard\.A1\.Flex&/);
+  assert.equal(current.state.inputs.imageId,'ocid1.image.oc1.iad.aaaaaaaaexampleubuntu2404aarch64x20260918');
+  // No full build, only Minimal: the newest Minimal. None at all: typed, as before.
+  const minimal=cLookups('oci',answer(cLookups('oci',answer(answer(toLookupsC('oci'),{}),{}),routeC('oci')),{}),routeC('oci'));
+  const asked=cLookups('oci',answer(minimal,{}),routeC('oci',{images:OCI.images.filter(x=>/Minimal/.test(x.displayName))}));
+  assert.equal(asked.state.inputs.imageId,'ocid1.image.oc1.iad.aaaaaaaaexampleubuntu2404minimalamd64x0918');
+  const none=cLookups('oci',answer(minimal,{}),routeC('oci',{images:OCI.armImages}));
+  assert.deepEqual(none.step.fields,[{key:'imageId',label:'Ubuntu 24.04 amd64 image OCID',type:'string',required:true}]);
+  // A credential answer without a valid tenancy OCID: the compartment typed, as before.
+  for(const credential of [{credentialRef:'cloud-ref'},{credentialRef:'cloud-ref',tenancyId:'ocid1.user.oc1..aaaa'},{credentialRef:'cloud-ref',tenancyId:'<b>'}]){
+    const typed=toLookupsC('oci','lookup-test',credential);
+    assert.equal(typed.state.tenancyId,undefined);assert.deepEqual(typed.step.fields,[{key:'compartmentId',label:'Compartment OCID',type:'string',required:true}]);
+    assert.equal(typed.step.message,'Which compartment should it use? Enter the OCID of the compartment, from Identity, Compartments in the Oracle Cloud console.');
+  }
+  // From the public part of the answer, too.
+  assert.equal(toLookupsC('oci','lookup-test',{credentialRef:'cloud-ref',public:{tenancyId:TENANCY}}).step.fields[0].default,TENANCY);
+});
+
+test('Google Cloud, Azure and Oracle Cloud: every refused, failed or odd lookup leaves its question typed as before and never pauses the setup',()=>{
+  const odd=[[401,{code:'CLOUD_HTTP_ERROR'}],[403,{code:'CLOUD_HTTP_ERROR'}],[404,{code:'CLOUD_HTTP_ERROR'}],[400,{code:'CLOUD_HTTP_ERROR'}],[409,{code:'CLOUD_HTTP_ERROR'}],
+    [429,{code:'CLOUD_HTTP_ERROR'}],[500,{code:'CLOUD_HTTP_ERROR'}],[503,{code:'CLOUD_HTTP_ERROR'}],[200,null],[200,''],[200,'<html>maintenance</html>'],[200,{}],[200,[]],
+    [200,{projects:{},items:'x',value:{}}]];
+  const typedAnswers={gcp:{projectId:'vpn-project-123456'},azure:{subscriptionId:SUB},oci:{zone:'Uocm:US-ASHBURN-AD-1',imageId:OCI_IMAGE_ID}};
+  const typedKeys={gcp:['projectId','region','zone','size'],azure:['subscriptionId','region','size'],oci:['zone','size','imageId']};
+  for(const provider of ['gcp','azure','oci'])for(const [status,b] of odd){
+    const name=provider+' '+status+' '+JSON.stringify(b),asked=[];
+    const done=settle(toLookupsC(provider),()=>[status,b],typedAnswers[provider],asked);
+    assert.equal(done.state.phase,'preflight',name);assert.equal(done.state.error,undefined,name);
+    for(const key of typedKeys[provider]){const step=asked.find(s=>s.fields[0].key===key);assert.equal(step.fields[0].type,'string',name+' '+key);
+      assert.equal(step.fields[0].default,C_DEFAULTS[provider][key],name+' '+key);assert.doesNotMatch(step.message,/choose Other/,name);}
+    // The answers typed (and the usual defaults) reach the checks; none counts as entered before.
+    assert.deepEqual(done.state.inputs,Object.assign({},C_DEFAULTS[provider],provider==='oci'?{compartmentId:TENANCY}:{},typedAnswers[provider],{sshCidr:'0.0.0.0/0'}),name);
+    // Typed where a list was read but empty, a value counts as entered before (as for Hetzner); the usual defaults never do.
+    assert.ok(Object.values(done.state.custom||{}).every(v=>Object.values(typedAnswers[provider]).includes(v)),name);
+  }
+  // Each lookup failing alone types only the questions it feeds (Google Cloud's zones: the region and the zone).
+  for(const [provider,lookup,keys] of [['gcp','projects',['projectId']],['gcp','zones',['region','zone']],['gcp','types',['size']],['azure','subscriptions',['subscriptionId']],
+    ['azure','regions',['region']],['azure','sizes',['size']],['oci','domains',['zone']],['oci','shapes',['size']],['oci','images',['imageId']]])
+    for(const reply of [[403,{code:'CLOUD_HTTP_ERROR'}],[503,{code:'CLOUD_HTTP_ERROR'}],[200,null]]){
+      const asked=[],done=settle(toLookupsC(provider),routeC(provider,{[lookup]:reply}),Object.assign({},typedAnswers[provider],{zone:provider==='oci'?'Uocm:US-ASHBURN-AD-1':undefined}),asked);
+      assert.equal(done.state.phase,'preflight',provider+' '+lookup);
+      for(const step of asked)assert.equal(step.fields[0].type,keys.includes(step.fields[0].key)||step.fields[0].key==='sshCidr'?'string':'select',provider+' '+lookup+' '+step.fields[0].key);
+    }
+  // Lists empty once filtered: typed.
+  for(const [provider,over,key] of [['gcp',{projects:{projects:[{projectId:'gone-1',lifecycleState:'DELETE_REQUESTED'}]}},'projectId'],
+    ['gcp',{zones:{items:GCP.zones.items.map(z=>Object.assign({},z,{status:'DOWN'}))}},'region'],
+    ['gcp',{types:{items:GCP.types.items.filter(x=>!/^(e2|n1|n2|n2d|t2d)-/.test(x.name)||x.memoryMb<1024)}},'size'],
+    ['azure',{subscriptions:{value:AZURE.subscriptions.value.filter(x=>x.state!=='Enabled')}},'subscriptionId'],
+    ['azure',{regions:{value:AZURE.locations.value.filter(x=>x.metadata.regionType!=='Physical'||x.type!=='Region')}},'region'],
+    ['azure',{sizes:{value:AZURE.sizes.value.filter(x=>/B1ls|p[a-z]*_v|A1_v2|NC4/.test(x.name))}},'size'],['azure',{sizes:{value:[]}},'size'],
+    ['oci',{domains:[]},'zone'],['oci',{shapes:OCI.shapes.filter(x=>!x.isFlexible||/A1|DenseIO/.test(x.shape))},'size']]){
+    const asked=[];settle(toLookupsC(provider),routeC(provider,over),typedAnswers[provider],asked);
+    assert.equal(asked.find(s=>s.fields[0].key===key).fields[0].type,'string',provider+' '+key);
+  }
+  // Busy once: one more try after the wait, then listed.
+  for(const provider of ['gcp','azure']){
+    let tries=0;const waits=[];const busy=cLookups(provider,toLookupsC(provider),step=>!tries++?[429,{code:'CLOUD_HTTP_ERROR'},{'retry-after':'3'}]:routeC(provider)(step),waits);
+    assert.deepEqual(waits.slice(0,3).map(s=>s.kind),['http','delay','http']);assert.equal(waits[1].delayMs,3000);assert.match(waits[2].id,/-again$/);
+    assert.equal(busy.step.fields[0].type,'select');
+  }
+  // Oracle Cloud's pages: opc-next-page sent back as page, five pages at most; past them, what was read without the cheapest claim.
+  const pages=[];let current=answer(answer(toLookupsC('oci'),{}),{});
+  current=cLookups('oci',current,step=>lookupOf(step)==='domains'?[200,[OCI.domains[pages.length-1]],{'opc-next-page':'p'+pages.length}]:routeC('oci')(step),pages);
+  assert.deepEqual(pages.map(s=>s.url.replace(/^.*\?/,'')),['limit=100&compartmentId='+TENANCY,'limit=100&compartmentId='+TENANCY+'&page=p1',
+    'limit=100&compartmentId='+TENANCY+'&page=p2','limit=100&compartmentId='+TENANCY+'&page=p3','limit=100&compartmentId='+TENANCY+'&page=p4']);
+  assert.deepEqual(listed(current.step),['Uocm:US-ASHBURN-AD-1','Uocm:US-ASHBURN-AD-2','(other)']);
+  const shapes=[];current=cLookups('oci',answer(current,{}),step=>[200,[OCI.shapes[shapes.length+1]],{'opc-next-page':'s'+shapes.length}],shapes);
+  assert.equal(shapes.length,5);assert.deepEqual(listed(current.step),['VM.Standard.E4.Flex','VM.Standard.E3.Flex','VM.Standard.E5.Flex','VM.Standard3.Flex','(other)']);
+  assert.doesNotMatch(current.step.message,/cheapest/);
+  // An Oracle Cloud lookup cut off (an error event other than other credentials): typed.
+  const cut=plain(worker.next(answer(answer(toLookupsC('oci'),{}),{}).state,{type:'error',code:'SSH_FAILED'}));
+  assert.equal(cut.state.phase,'options');assert.equal(cut.step.fields[0].key,'zone');assert.equal(cut.step.fields[0].type,'string');assert.equal(cut.state.error,undefined);
+});
+
+test('Google Cloud, Azure and Oracle Cloud: a value typed after Other comes back as entered before, unless the new lists leave it out there',()=>{
+  // Google Cloud's and Azure's lists are the zone's or region's whole list: a value they leave out cannot be ordered there.
+  for(const [provider,typed,missing,extra] of [['gcp','n2-standard-8','e2-nope-1',{}],['azure','Standard_D4s_v5','Standard_Q9_v9',{}],['oci','VM.Standard.A1.Flex',null,{}]]){
+    const sizeAt=s=>s.fields[0].key==='size',respond=routeC(provider,provider==='azure'?{sizes:{value:AZURE.sizes.value.concat([{name:'Standard_D4s_v5',numberOfCores:4,memoryInMB:16384}])}}:
+      provider==='gcp'?{types:{items:GCP.types.items.concat([{name:'n2-standard-8',guestCpus:8,memoryMb:32768,architecture:'X86_64'}])}}:{images:OCI.images.concat(OCI.armImages)});
+    let current=toLookupsC(provider);
+    for(;;){current=cLookups(provider,current,respond);if(sizeAt(current.step))break;current=answer(current,{});}
+    current=answer(current,{size:'(other)'});
+    assert.equal(current.step.fields[0].type,'string');assert.equal(current.state.typing,'size');
+    assert.match(current.step.title,/^Which (machine type|VM size|shape)\? Type or say its name, such as /);
+    current=answer(current,{size:typed});assert.deepEqual(current.state.custom,{size:typed},provider);
+    current=settle(current,respond,{imageId:OCI_IMAGE_ID});assert.equal(current.state.phase,'preflight');assert.equal(current.state.inputs.size,typed);
+    // Change server settings: the lists read again; the typed value first, selected.
+    current=answer(plain(worker.next(current.state,{type:'result',requestId:current.step.id,result:{status:503,body:{code:'CLOUD_HTTP_ERROR'}}})),{action:'edit'});
+    for(;;){current=cLookups(provider,current,respond);if(sizeAt(current.step))break;current=answer(current,{});}
+    assert.deepEqual(current.step.fields[0].options[0],{value:typed,label:typed+' (entered before)'},provider);assert.equal(current.step.fields[0].default,typed);
+    assert.match(current.step.message,/your earlier answer first, then cheapest first/);
+    if(!missing)continue;
+    // One the zone's or region's list leaves out: offered, not selected; after Other, the suggestion.
+    let again=settle(answer(answer(current,{size:'(other)'}),{size:missing}),respond);
+    again=answer(plain(worker.next(again.state,{type:'result',requestId:again.step.id,result:{status:503,body:{code:'CLOUD_HTTP_ERROR'}}})),{action:'edit'});
+    for(;;){again=cLookups(provider,again,respond);if(sizeAt(again.step))break;again=answer(again,{});}
+    const entry=again.step.fields[0].options.find(o=>o.value===missing);
+    assert.equal(entry.label,missing+' (entered before, not available here)',provider);assert.notEqual(again.step.fields[0].default,missing);
+    assert.equal(again.step.fields[0].options[0].value,again.step.fields[0].default);
+    assert.equal(answer(again,{size:'(other)'}).step.fields[0].default,again.step.fields[0].default,provider);
+  }
+  // Questions with no lookup before them still keep what was typed after Other: Oracle Cloud's compartment and region.
+  let current=answer(toLookupsC('oci'),{compartmentId:'(other)'});
+  assert.equal(current.step.title,'Which compartment? Type or say its OCID.');
+  const DEDICATED='ocid1.compartment.oc1..aaaaaaaaexamplevpncompartment';
+  current=settle(answer(current,{compartmentId:DEDICATED}),routeC('oci'));
+  assert.equal(current.state.phase,'preflight');assert.deepEqual(current.state.custom,{compartmentId:DEDICATED});
+  assert.ok(current.state.inputs.imageId);
+  current=answer(plain(worker.next(current.state,{type:'result',requestId:current.step.id,result:{status:503,body:{code:'CLOUD_HTTP_ERROR'}}})),{action:'edit'});
+  assert.deepEqual(pairs(current.step),[[DEDICATED,DEDICATED+' (entered before)'],[TENANCY,'Root compartment'],['(other)','Other (type a value)']]);
+  // Its lookups then go to that compartment.
+  const seen=[];cLookups('oci',answer(answer(current,{}),{}),routeC('oci'),seen);
+  assert.match(seen[0].url,new RegExp('compartmentId='+DEDICATED+'$'));
+  // Google Cloud: a project typed after Other is read with it; refused, its region and zone are typed.
+  const typed=[];const gcp=cLookups('gcp',answer(answer(cLookups('gcp',toLookupsC('gcp'),routeC('gcp')),{projectId:'(other)'}),{projectId:'other-project-1'}),()=>[403,{code:'CLOUD_HTTP_ERROR'}],typed);
+  assert.deepEqual(typed.map(s=>s.url.split('?')[0]),['https://compute.googleapis.com/compute/v1/projects/other-project-1/zones']);
+  assert.deepEqual(gcp.step.fields,[{key:'region',label:'Region',type:'string',required:true,default:'us-central1'}]);
+});
+
+test('Google Cloud, Azure and Oracle Cloud: Change server settings and other credentials read the lists again; other credentials during a lookup pause',()=>{
+  for(const provider of ['gcp','azure','oci']){
+    let current=settle(toLookupsC(provider),routeC(provider));
+    assert.equal(current.state.phase,'preflight',provider);
+    current=answer(plain(worker.next(current.state,{type:'result',requestId:current.step.id,result:{status:404,body:{code:'CLOUD_HTTP_ERROR'}}})),{action:'edit'});
+    const first=provider==='oci'?'lookup-test-catalog-domains-1':provider==='gcp'?'lookup-test-catalog-projects-1':'lookup-test-catalog-subscriptions-1';
+    if(provider==='oci'){assert.equal(current.state.phase,'options');assert.equal(current.step.fields[0].default,TENANCY);current=answer(answer(current,{}),{});}
+    assert.equal(current.state.phase,'catalog',provider);assert.equal(current.step.id,first);
+    // Other credentials during a lookup: paused with the reason; checking again sends the same lookup.
+    const paused=plain(worker.next(current.state,{type:'error',requestId:current.step.id,code:'CREDENTIAL_CHANGED'}));
+    assert.equal(paused.state.phase,'recovery');assert.match(paused.step.message,/^Other cloud credentials were entered/);
+    assert.equal(answer(paused,{action:'retry'}).step.id,first);
+    // Update cloud account credentials: the lists afresh with them (Oracle Cloud: its new tenancy offered).
+    const other='ocid1.tenancy.oc1..aaaaaaaaothertenancy';
+    const fresh=answer(answer(paused,{action:'account'}),provider==='oci'?{credentialRef:'new-ref',tenancyId:other}:{credentialRef:'new-ref'});
+    if(provider==='oci'){assert.equal(fresh.state.phase,'options');assert.equal(fresh.state.optionIndex,0);assert.equal(fresh.step.fields[0].default,other);assert.equal(fresh.state.tenancyId,other);}
+    else {assert.equal(fresh.step.id,first);assert.equal(fresh.step.auth.credentialRef,'new-ref');assert.deepEqual(fresh.state.catalog,{read:{}});}
+  }
+  // A later operation starts without the tenancy or the lists.
+  const ready=Object.assign(state('oci'),{phase:'ready',host:'203.0.113.7',tenancyId:TENANCY,catalog:{read:{domains:null}}});
+  const deleting=lifecycle('delete',ready);
+  for(const field of ['tenancyId','catalog'])assert.equal(deleting.state[field],undefined,field);
+});
+
+test('Google Cloud\'s, Azure\'s and Oracle Cloud\'s suggestions pass their read-only checks and reach the create request unchanged',()=>{
+  // gcp: the machine type as Google Cloud reads it, then the image; azure: the subscription, then the region's VM sizes; oci: the
+  // image, then the domain's shapes for that image.
+  const checks={gcp:[{name:'e2-micro',architecture:'X86_64'},{status:'READY'}],azure:[{state:'Enabled'},AZURE.sizes],
+    oci:[{operatingSystem:'Canonical Ubuntu',operatingSystemVersion:'24.04'},OCI.shapes]};
+  const create={gcp:b=>[b.machineType,b.disks[0].initializeParams.sourceImage],azure:b=>[b.location,b.properties.hardwareProfile.vmSize],
+    oci:b=>[b.compartmentId,b.availabilityDomain,b.shape,b.shapeConfig,b.sourceDetails.imageId]};
+  const expected={gcp:['https://compute.googleapis.com/compute/v1/projects/sandbox-7f3a/zones/us-central1-a/machineTypes/e2-micro','projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64'],
+    azure:['eastus','Standard_B2ats_v2'],oci:[TENANCY,'Uocm:US-ASHBURN-AD-1','VM.Standard.E4.Flex',{ocpus:1,memoryInGBs:2},OCI_IMAGE_ID]};
+  for(const provider of Object.keys(checks)){
+    let current=settle(toLookupsC(provider),routeC(provider));
+    assert.equal(current.state.phase,'preflight',provider);
+    for(const b of checks[provider])current=result(current,plain(b));
+    assert.equal(current.step.form,'confirm',provider+' '+JSON.stringify(current.state.error));
+    const server=worker.graph(current.state).find(op=>op.key==='server').create;
+    assert.deepEqual(plain(create[provider](server.body)),expected[provider],provider);
+    if(provider==='oci')assert.equal(server.url,'https://iaas.us-ashburn-1.oraclecloud.com/20160918/instances');
+    if(provider==='azure')assert.match(server.url,new RegExp('^https://management\\.azure\\.com/subscriptions/'+SUB+'/'));
+  }
+});
+
+test('Google Cloud, Azure and Oracle Cloud checks refuse a zone of another region, an Arm size and a shape the create cannot size',()=>{
+  refused(result(preflighting('gcp',{zone:'europe-west1-b'}),{name:'e2-small'}),
+    'Zone europe-west1-b is not in region us-central1. A Google Cloud zone is its region\'s name and a letter, such as us-central1-a in us-central1.');
+  refused(result(preflighting('gcp',{size:'t2a-standard-1'}),{name:'t2a-standard-1',architecture:'ARM64'}),
+    'Machine type t2a-standard-1 is an Arm type, and this setup boots Ubuntu 24.04 for x86 (amd64). Choose an x86 type, such as e2-small.');
+  for(const size of ['Standard_B2pts_v2','Standard_D2ps_v5','Standard_D2plds_v5'])
+    refused(result(preflighting('azure',{size},1),{value:[{name:size}]}),'VM size '+size+' is an Arm size, and this setup boots Ubuntu 24.04 for x64. Choose an x64 size, such as Standard_B2ats_v2.');
+  // Sizes whose names hold no lower-case p after their number pass.
+  for(const size of ['Standard_B2ats_v2','Standard_NP10s','Standard_D2s_v5']){const ok=result(preflighting('azure',{size},1),{value:[{name:size}]});assert.equal(ok.step.form,'confirm',size);}
+  refused(result(preflighting('oci',{size:'VM.Standard.E2.1.Micro'},1),OCI.shapes),
+    'Shape VM.Standard.E2.1.Micro has a fixed size, and this setup creates a Flex shape with 1 OCPU and 2 GB RAM. Choose a Flex shape, such as VM.Standard.E4.Flex.');
+  refused(result(preflighting('oci',{size:'VM.DenseIO.E4.Flex'},1),OCI.shapes),
+    'Shape VM.DenseIO.E4.Flex cannot run with 1 OCPU and 2 GB RAM, as this setup creates it. Choose another Flex shape, such as VM.Standard.E4.Flex.');
+  // Arm A1 Flex allows 1 OCPU and 2 GB: the checks pass it (typed after Other).
+  assert.equal(result(preflighting('oci',{size:'VM.Standard.A1.Flex'},1),OCI.shapes).step.form,'confirm');
+});
+
+test('Google Cloud, Azure and Oracle Cloud lookup step ids are valid and distinct, and only compact projections stay in the state',()=>{
+  for(const provider of ['gcp','azure','oci']){
+    const ids=[],asked=[];const done=settle(toLookupsC(provider,'x'.repeat(64)),step=>{ids.push(step.id);return routeC(provider)(step);},{},asked);
+    for(const id of ids.concat(asked.map(s=>s.id)))assert.match(id,STEP_ID);
+    assert.equal(new Set(ids).size,ids.length,provider);assert.equal(done.state.catalog,undefined);
+    // Each select's preselected answer is listed first and is a valid setting; Other is last and never stored.
+    for(const step of asked)if(step.fields[0].options){const o=step.fields[0].options;assert.equal(o[0].value,step.fields[0].default);assert.equal(o[o.length-1].value,'(other)');
+      assert.ok(o.every(x=>/^[a-zA-Z0-9_.:-]{1,256}$/.test(x.value)||x.value==='(other)'));assert.ok(o.every(x=>x.label.length<=90&&!/[<>\u0000-\u001f]/.test(x.label)));}
+    assert.ok(!Object.values(done.state.inputs).includes('(other)'));
+  }
+  // The largest catalog kept: Google Cloud's zones (about 130 in a real project, grouped by region).
+  const zones={items:Object.keys(JSON.parse('{"us-central1":1}')).concat(Array.from({length:42},(_,i)=>'region'+i+'-west1')).flatMap(r=>['a','b','c'].map(l=>({name:r+'-'+l,status:'UP',
+    region:'https://www.googleapis.com/compute/v1/projects/p/regions/'+r})))};
+  const big=cLookups('gcp',answer(cLookups('gcp',toLookupsC('gcp'),routeC('gcp')),{}),routeC('gcp',{zones}));
+  // 43 regions: 23 and Other, within the voice's 26 choices; us-central1 among them.
+  assert.equal(big.step.fields[0].options.length,24);assert.equal(big.step.fields[0].options[0].value,'us-central1');
+  assert.ok(JSON.stringify(big.state.catalog).length<4000,JSON.stringify(big.state.catalog).length);
+  // Hostile names are cut and stripped of markup and control characters.
+  const hostile=cLookups('azure',toLookupsC('azure'),routeC('azure',{subscriptions:{value:[{subscriptionId:SUB,state:'Enabled',displayName:'<b>x</b>‮\u0007'+'y'.repeat(60)}]}}));
+  assert.equal(hostile.step.fields[0].options[0].label,'bx/b '+'y'.repeat(27));
+});
+
+// VPN Setup 1.0.6 review fixes: every provider's lists, answered from the fixtures above.
+const anyRoute=(provider,over={})=>(ROUTES[provider]?route:B_ROUTES[provider]?routeB:routeC)(provider,over);
+// Answers the questions (answers by key; {} keeps the preselected one) until the one for key, or until the checks.
+function upTo(current,respond,key,answers={}){
+  for(let i=0;i<14;i++){current=lookups(current,respond);if(current.state.phase!=='options'||current.step.fields[0].key===key)break;
+    const k=current.step.fields[0].key;current=answer(current,k in answers?{[k]:answers[k]}:{});}
+  return current;
+}
+// A check refuses something (a 503 here) and Change server settings is chosen: the lists are read again.
+const editAfterCheck=current=>answer(plain(worker.next(current.state,{type:'result',requestId:current.step.id,result:{status:503,body:{code:'CLOUD_HTTP_ERROR'}}})),{action:'edit'});
+
+test('a region typed after Other that the fresh region list names but cannot use comes back as not available here, not selected',()=>{
+  // DigitalOcean's nyc2 (available: false), Linode's us-west (an outage), Azure's logical "unitedstates", and a Vultr region with no
+  // plan that region list knows; then one no list knows, which stays "(entered before)" and selected, as in 1.0.5.
+  const ADDRESS='198.51.100.0/24';
+  for(const [provider,typed,away,suggested,over] of [['digitalocean','nyc2',true,'nyc3'],['linode','us-west',true,'us-east'],['azure','unitedstates',true,'eastus'],
+    ['vultr','hnl',true,'ewr',{plans:{plans:VULTR.plans.plans.map(p=>Object.assign({},p,{locations:p.locations.filter(l=>l!=='hnl')}))}}],['digitalocean','nyc9',false,'nyc3']]){
+    const respond=anyRoute(provider,over),name=provider+' '+typed;
+    let current=upTo(toLookupsC(provider),respond,'region');
+    current=answer(answer(current,{region:'(other)'}),{region:typed});assert.equal(current.state.custom.region,typed,name);
+    current=upTo(current,respond,'sshCidr',{imageId:'2284'});current=answer(current,{sshCidr:ADDRESS});assert.equal(current.state.phase,'preflight',name);
+    current=upTo(editAfterCheck(current),respond,'region');
+    const f=current.step.fields[0],entry=f.options.find(o=>o.value===typed);
+    if(away){
+      assert.equal(entry.label,typed+' (entered before, not available here)',name);assert.equal(f.default,suggested,name);assert.equal(f.options[0].value,suggested,name);
+      // After Other there, the suggestion is filled in, not the region the list knows cannot be used.
+      assert.equal(answer(current,{region:'(other)'}).step.fields[0].default,suggested,name);
+    } else {assert.deepEqual(f.options[0],{value:typed,label:typed+' (entered before)'},name);assert.equal(f.default,typed,name);}
+  }
+});
+
+test('a typed question after an answer that rules out the usual default is prefilled from that answer',()=>{
+  // Lightsail: a listed region whose zone list fails, or a region typed after Other: one of its own zones, not us-east-1a.
+  for(const [region,how] of [['eu-central-1','listed'],['ap-south-1','typed']]){
+    let current=upTo(toLookups('aws'),route('aws',{zones:[503,{code:'CLOUD_HTTP_ERROR'}]}),'region');
+    current=how==='listed'?answer(current,{region}):answer(answer(current,{region:'(other)'}),{region});
+    current=lookups(current,route('aws',{zones:[503,{code:'CLOUD_HTTP_ERROR'}]}));
+    assert.equal(current.step.fields[0].key,'zone');assert.equal(current.step.fields[0].default,region+'a',region);
+    assert.equal(current.step.message,'Which availability zone should it use? Enter an availability zone of '+region+', such as '+region+'a.');
+    // Taken as prefilled, it is no answer to offer back as entered before.
+    const next=answer(current,{});assert.equal(next.state.inputs.zone,region+'a');assert.equal(get(next.state,'custom.zone'),undefined);
+  }
+  // An earlier zone of the same region is kept.
+  const kept=Object.assign(toLookups('aws').state,{phase:'options',optionIndex:1,catalog:{read:{regions:null,zones:null}}});kept.inputs={region:'eu-central-1',zone:'eu-central-1c'};
+  assert.equal(plain(worker.next(kept,{type:'resume'})).step.fields[0].default,'eu-central-1c');
+  // Google Cloud: a region the zone list lacks (typed after Other): <region>-a, not us-central1-a.
+  let gcp=upTo(toLookupsC('gcp'),routeC('gcp'),'region');gcp=cLookups('gcp',answer(answer(gcp,{region:'(other)'}),{region:'us-east7'}),routeC('gcp'));
+  assert.equal(gcp.step.fields[0].key,'zone');assert.equal(gcp.step.fields[0].default,'us-east7-a');
+  // OVHcloud: the typed region on the CA or US API site is that site's, and changes with the site; one typed before stays.
+  const refusedAll=routeB('ovh',Object.fromEntries(Object.keys(B_ROUTES.ovh).map(k=>[k,[403,{code:'CLOUD_HTTP_ERROR'}]])));
+  for(const [endpoint,region] of [['eu','GRA11'],['ca','BHS5'],['us','US-EAST-VA-1']]){
+    const current=upTo(answer(toLookups('ovh'),{endpoint}),refusedAll,'region',{projectId:PROJECT});
+    assert.equal(current.step.fields[0].type,'string');assert.equal(current.step.fields[0].default,region,endpoint);
+  }
+  let site=upTo(answer(toLookups('ovh'),{endpoint:'eu'}),refusedAll,'region',{projectId:PROJECT});
+  site=upTo(answer(site,{}),refusedAll,'sshCidr',{size:D2,imageId:UBUNTU});site=answer(site,{});assert.equal(site.state.inputs.region,'GRA11');
+  site=editAfterCheck(site);assert.equal(site.step.fields[0].key,'endpoint');
+  const ca=upTo(answer(site,{endpoint:'ca'}),refusedAll,'region',{projectId:PROJECT});assert.equal(ca.step.fields[0].default,'BHS5');
+  const own=Object.assign(plain(ca.state),{});own.inputs.region='SBG5';assert.equal(plain(worker.next(own,{type:'resume'})).step.fields[0].default,'SBG5');
+});
+
+test('Vultr lists only plans with a local boot disk, and its checks refuse a Block Storage one typed after Other',()=>{
+  // VX1 plans on Block Storage alone need a boot volume the create does not send; VX1 plans with a local disk (-###s) are fine.
+  const vx=(id,storage_type,monthly_cost)=>({id,vcpu_count:2,ram:8192,monthly_cost,type:'vx1',locations:['ewr'],location_cost:{},gpu_brand:'none',deploy_ondemand:true,cpu_vendor:'AMD',storage_type});
+  const plans={plans:VULTR.plans.plans.concat([vx('vx1-g-2c-8g','block_storage',4),vx('vx1-g-2c-8g-120s','local_and_block_storage',4.5)]),meta:VULTR.plans.meta};
+  const open={available_plans:VULTR.ewr.available_plans.concat(['vx1-g-2c-8g','vx1-g-2c-8g-120s']),available_vpc_only_plans:VULTR.ewr.available_vpc_only_plans};
+  const current=upTo(toLookups('vultr'),route('vultr',{plans,sizes:plans,availability:open}),'size');
+  assert.ok(!listed(current.step).includes('vx1-g-2c-8g'));assert.equal(listed(current.step)[0],'vx1-g-2c-8g-120s');
+  // The live catalog of 2026-11-14 (storage types as read): no Block Storage plan listed in ewr.
+  const live=VULTR.live,blocks=live.plans.plans.filter(p=>p.storage_type==='block_storage').map(p=>p.id);
+  const liveSizes=upTo(toLookups('vultr'),route('vultr',{regions:live.regions,plans:live.plans,availability:live.ewr,sizes:live.plans}),'size');
+  assert.ok(!listed(liveSizes.step).some(v=>blocks.includes(v)));
+  // The checks: refused before anything is created.
+  let check=preflighting('vultr',{size:'vx1-g-2c-8g',region:'ewr',imageId:'2284'});
+  while(check.state.phase==='preflight')check=plain(worker.next(check.state,{type:'result',requestId:check.step.id,result:{status:200,body:/\/os/.test(check.step.url)?VULTR.os:plans}}));
+  refused(check,'Vultr plan vx1-g-2c-8g boots from Block Storage, which this setup does not create. Choose a plan with local storage, such as vc2-1c-1gb.');
+  check=preflighting('vultr',{size:'vx1-g-2c-8g-120s',region:'ewr',imageId:'2284'});
+  while(check.state.phase==='preflight')check=plain(worker.next(check.state,{type:'result',requestId:check.step.id,result:{status:200,body:/\/os/.test(check.step.url)?VULTR.os:plans}}));
+  assert.equal(check.step.form,'confirm');
+});
+
+test('every listed question stays within the voice\'s 26 choices, keeping the provider\'s main regions, the earlier answer and the suggestion',()=>{
+  const most=26,each=(at,name)=>{const f=(at.step||at).fields[0];assert.ok(f,name);if(f.options)assert.ok(f.options.length<=most,name+' '+f.options.length);};
+  // Every question of every provider, as the fixtures and the live Vultr and Linode catalogs list them.
+  for(const provider of ['vultr','linode','digitalocean','aws','ovh','scaleway','gcp','azure','oci']){
+    const asked=[];settle(toLookupsC(provider),anyRoute(provider),{},asked);for(const step of asked)each(step,provider+' '+step.fields[0].key);
+  }
+  // Long lists: Azure's 60 regions, Google Cloud's 45, 40 projects or subscriptions; Oracle Cloud's static 44.
+  const regions=Array.from({length:60},(_,i)=>({name:'region'+i,displayName:'Region '+i,type:'Region',metadata:{regionType:'Physical',regionCategory:i%4?'Recommended':'Other'}}));
+  const azure=upTo(toLookupsC('azure'),routeC('azure',{regions:{value:AZURE.locations.value.concat(regions)}}),'region');each(azure,'azure regions');
+  assert.ok(listed(azure.step).includes('westeurope')&&listed(azure.step).includes('eastus'));
+  const zones={items:Array.from({length:45},(_,i)=>({name:'xx-west'+i+'-a',status:'UP',region:'https://compute.googleapis.com/compute/v1/projects/p/regions/xx-west'+i})).concat(GCP.zones.items)};
+  const gcp=upTo(toLookupsC('gcp'),routeC('gcp',{zones}),'region');each(gcp,'gcp regions');assert.ok(listed(gcp.step).includes('europe-west1'));
+  const projects={projects:Array.from({length:40},(_,i)=>({projectId:'project-'+String(i).padStart(2,'0'),name:'Project '+i,lifecycleState:'ACTIVE'}))};
+  const many=upTo(toLookupsC('gcp'),routeC('gcp',{projects}),'projectId');each(many,'gcp projects');
+  const subscriptions={value:Array.from({length:40},(_,i)=>({subscriptionId:'aaaa0001-0000-4000-8000-00000000'+String(i).padStart(4,'0'),state:'Enabled',displayName:'Team '+i}))};
+  each(upTo(toLookupsC('azure'),routeC('azure',{subscriptions}),'subscriptionId'),'azure subscriptions');
+  // Oracle Cloud: the main regions; the earlier answer outside them, and one typed before, still offered, still within 26.
+  const oci=upTo(toLookupsC('oci'),routeC('oci'),'region');each(oci,'oci');assert.match(oci.step.message,/Oracle Cloud's main commercial regions/);
+  for(const v of ['us-ashburn-1','eu-frankfurt-1','uk-london-1','ap-tokyo-1','sa-saopaulo-1'])assert.ok(listed(oci.step).includes(v),v);
+  const later=Object.assign(plain(oci.state),{});later.inputs.region='ap-batam-1';
+  const back=plain(worker.next(later,{type:'resume'}));each(back,'oci earlier');assert.equal(back.step.fields[0].options[0].value,'ap-batam-1');
+  later.inputs.region='ap-delhi-1';later.custom={region:'ap-delhi-1'};
+  const typed=plain(worker.next(later,{type:'resume'}));each(typed,'oci typed before');assert.deepEqual(typed.step.fields[0].options[0],{value:'ap-delhi-1',label:'ap-delhi-1 (entered before)'});
+});
+
+test('account lists select the first by name without calling it suggested, and tell apart two of the same name',()=>{
+  // Google Cloud's projects: the first by name selected, nothing marked suggested; Scaleway's "default" project is.
+  const gcp=upTo(toLookupsC('gcp'),routeC('gcp'),'projectId');
+  assert.equal(gcp.step.fields[0].default,'sandbox-7f3a');assert.ok(!gcp.step.fields[0].options.some(o=>/suggested/.test(o.label)));
+  assert.equal(upTo(toLookups('scaleway'),routeB('scaleway'),'projectId').step.fields[0].options[0].label,'default (suggested)');
+  // Two OVHcloud or Scaleway projects of the same name: with their ID's start, as Azure's subscriptions.
+  const twins=[{id:'0123456789abcdef0123456789abcdef',resourceStatus:'READY',currentState:{name:'Project 2024'}},{id:'fedcba9876543210fedcba9876543210',resourceStatus:'READY',currentState:{name:'Project 2024'}}];
+  assert.deepEqual(pairs(upTo(answer(toLookups('ovh'),{}),routeB('ovh',{projects:twins}),'projectId').step),
+    [[PROJECT,'Project 2024 · 01234567'],['fedcba9876543210fedcba9876543210','Project 2024 · fedcba98'],['(other)','Other (type a value)']]);
+  const web=[{id:'11111111-0000-4000-8000-000000000001',name:'web',description:'Shop'},{id:'22222222-0000-4000-8000-000000000002',name:'web'}];
+  assert.deepEqual(pairs(upTo(toLookups('scaleway'),routeB('scaleway',{projects:{projects:web,total_count:2}}),'projectId').step),
+    [[web[0].id,'web · 11111111 · Shop'],[web[1].id,'web · 22222222'],['(other)','Other (type a value)']]);
+});
+
+test('the review shows the names of listed answers whose values are IDs, and of the images filled in without asking',()=>{
+  const confirmOf=current=>{current=Object.assign(plain(current.state),{phase:'confirm'});return plain(worker.next(current,{type:'resume'})).step.summary;};
+  // OVHcloud: the project, the flavor and the image by name beside their IDs.
+  let ovh=settle(answer(toLookups('ovh'),{}),routeB('ovh'));assert.equal(ovh.state.phase,'preflight');
+  let summary=confirmOf(ovh);
+  assert.equal(summary.settings.size,D2);assert.deepEqual(summary.names,{projectId:'vpn-project',size:'d2-2',imageId:'Ubuntu 24.04 · 2026-10-02'});
+  // Vultr's OS ID filled in without asking; typed answers have no name.
+  const vultr=settle(toLookups('vultr'),route('vultr'));assert.deepEqual(confirmOf(vultr).names,{imageId:'Ubuntu 24.04 LTS x64'});
+  const typed=settle(toLookups('vultr'),()=>[403,{code:'CLOUD_HTTP_ERROR'}],{imageId:'2284'});assert.equal(confirmOf(typed).names,undefined);
+  // A name goes when its setting is answered again by typing, and once the review is confirmed.
+  ovh=answer(answer(upTo(editAfterCheck(ovh),routeB('ovh'),'size'),{size:'(other)'}),{size:D2});
+  ovh=settle(ovh,routeB('ovh'));summary=confirmOf(ovh);assert.equal(summary.names.size,undefined);assert.equal(summary.names.projectId,'vpn-project');
+  const confirming=Object.assign(plain(ovh.state),{phase:'confirm'});
+  assert.equal(plain(worker.next(confirming,{type:'input',value:{confirmed:true}})).state.names,undefined);
 });
