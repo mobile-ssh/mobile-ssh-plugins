@@ -12,7 +12,14 @@
   const ERRORS = {'A deployment operation is already pending':'Another operation on this VPN has not finished. Continue or resume it first.',
     'Workflow changed':CHANGED,'Workflow cannot resume':CHANGED,NO_PENDING_INPUT:'This step no longer needs an answer.',
     NO_PENDING_CREDENTIAL_INPUT:'The cloud credentials are available again. Resume the workflow instead.',
-    INPUT_EXPIRED:'The review timed out. Open it again to continue.',DEPLOYMENT_NOT_READY:'This VPN has no finished setup to work on yet.'};
+    INPUT_EXPIRED:'The review timed out. Open it again to continue.',DEPLOYMENT_NOT_READY:'This VPN has no finished setup to work on yet.',
+    BRIDGE_UPGRADE_REQUIRED:'Update Mobile SSH to use this version of VPN Setup.',STALE_WORKFLOW_ANSWER:CHANGED};
+  // Codes a retry cannot change: no "Try again" for them.
+  ['WORKFLOW_CAPABILITY_DENIED','WORKFLOW_RUNTIME_UNAVAILABLE','WORKFLOW_UNAVAILABLE','INVALID_OPERATION','CREDENTIAL_FORM_REQUIRED']
+    .forEach(code => { ERRORS[code] = 'This version of Mobile SSH can\'t run this step. Update Mobile SSH.'; });
+  // Other native codes are not for reading: they get a plain sentence instead.
+  const readable = reason => (Object.prototype.hasOwnProperty.call(ERRORS, reason) ? ERRORS[reason]
+    : /^[A-Z][A-Z0-9_]*$/.test(reason) ? 'The workflow could not be updated. Try again.' : reason) || 'The workflow could not be updated.';
   let groups = [], chosen = null, followed = null, running = null, timer = null, stopped = false, requested = 0, applied = 0;
   // Slots showing "Wait until … finishes", one per control tapped while an action ran.
   const drawn = {}, waiting = new Set();
@@ -23,6 +30,17 @@
   const pending = job => !finished(job) || !!job.pendingStep;
   // Only these advance on their own; paused and waiting jobs need the user first.
   const progressing = job => ['READY','RUNNING'].includes(status(job));
+  // Cloud resources the job's receipts still hold.
+  const held = job => Object.values((job.state || {}).resources || {}).filter(value => value && value.owned && value.status !== 'deleted').length;
+  // A setup that reached its creates may hold one no receipt shows yet: a create cut off, or still in flight.
+  const creating = job => {
+    const state = job.state || {}, step = job.pendingStep || {}, at = ['recovery','cancelled'].includes(state.phase) ? state.interruptedPhase : state.phase;
+    return ['provision','wait'].includes(at) || step.kind === 'http' && String(step.method || 'GET').toUpperCase() !== 'GET';
+  };
+  // A setup VPN Setup 1.0.0-1.0.2 stopped at its read-only checks: its recovery has no message, and its first answer only
+  // repeats the failing check. It created nothing; a new setup asks the settings question instead.
+  const oldCheck = job => (job.pendingStep || {}).form === 'recovery' && !(job.pendingStep || {}).message && (job.state || {}).interruptedPhase === 'preflight';
+  const CONTINUES = 'This continues your unfinished setup. To start over instead, choose Stop workflow on it first.';
   const selection = () => groups.find(item => item.id === chosen);
   const current = () => { const deployment = selection(); return deployment && deployment.current; };
   function message(value) { if ($('notice').textContent !== value) $('notice').textContent = value; }
@@ -58,9 +76,9 @@
     const job = deployment.current, state = job.state || {}, st = status(job);
     const established = deployment.jobs.some(item => operation(item) === 'setup' && status(item) === 'SUCCEEDED' && (item.state || {}).phase === 'ready');
     if (!established && operation(job) === 'setup' && (['CANCELLED','FAILED'].includes(st) || state.phase === 'cancelled')) {
-      const held = Object.values(state.resources || {}).filter(value => value && value.owned && value.status !== 'deleted').length;
-      const touched = (state.clients || []).length || ['bootstrap','import'].includes(state.phase);
-      return 'Setup stopped · ' + (held ? held + ' cloud resource' + (held === 1 ? ' remains' : 's remain') : touched ? 'server may be partly set up' : 'nothing created');
+      const count = held(job), touched = (state.clients || []).length || ['bootstrap','import'].includes(state.phase);
+      return 'Setup stopped · ' + (count ? count + ' cloud resource' + (count === 1 ? ' remains' : 's remain') : creating(job) ? 'cloud resources may exist'
+        : touched ? 'server may be partly set up' : 'nothing created');
     }
     if (!pending(job) && state.phase === 'deleted') return 'Deleted';
     if (!pending(job) && established && st === 'SUCCEEDED') return 'Ready';
@@ -73,6 +91,13 @@
       jobs.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
       return {id, jobs, current: jobs.find(pending) || jobs[0]};
     });
+  }
+  const ongoing = job => operation(job) === 'setup' && ['READY','RUNNING','WAITING_INPUT','PAUSED'].includes(status(job));
+  // A setup that has not stopped and holds no cloud resource is continued rather than started again beside it:
+  // the shown one first, else the latest. "Stop workflow" on it is the way to start over.
+  function unfinished() {
+    const found = groups.filter(item => ongoing(item.current) && !held(item.current) && !creating(item.current) && !oldCheck(item.current));
+    return found.find(item => item.id === chosen) || found.sort((a, b) => (b.current.updatedAt || 0) - (a.current.updatedAt || 0))[0];
   }
   function when(job) {
     if (!Number.isFinite(job.updatedAt)) return '';
@@ -99,7 +124,11 @@
     $(id).replaceChildren(...items.map(([value, mark]) => { const li = document.createElement('li'); li.textContent = value; if (mark) li.className = 'current'; return li; }));
   }
   function draw() {
-    const deployment = selection(), job = deployment && deployment.current;
+    const deployment = selection(), job = deployment && deployment.current, resumable = !!unfinished();
+    const old = groups.filter(item => ongoing(item.current) && oldCheck(item.current)).length;
+    text('new', resumable ? 'Continue VPN setup' : 'Set up a VPN');
+    show('new-hint', resumable ? CONTINUES : old === 1 ? 'An earlier setup stopped at its checks and created nothing. Choose Stop workflow on it to clear it.'
+      : old ? old + ' earlier setups stopped at their checks and created nothing. Choose Stop workflow on each to clear them.' : '');
     $('empty').hidden = groups.length > 0; $('picker').hidden = !groups.length;
     options('deployments', groups.map(item => [item.id, ((item.current.state || {}).name || 'VPN') + ' · ' + summary(item)]), chosen || '');
     $('current').hidden = !job; if (!job) return;
@@ -109,7 +138,8 @@
     text('question', state.phase === 'deleted' && state.mode === 'manual'
       ? 'VPN removed. Delete any unused VM, disks and public IP in your cloud console to stop their charges.'
       : st === 'WAITING_INPUT' && step.title || '');
-    show('problem', step.form === 'recovery' && state.error && state.error.message || '');
+    // A recovery's reason, or why a setting is asked again.
+    show('problem', step.form === 'recovery' && state.error && state.error.message || step.error && step.error.message || '');
     const credential = st === 'PAUSED' && job.needsCredential === true;
     $('review').hidden = !(st === 'WAITING_INPUT' && step.kind === 'input') && !credential;
     text('review', credential ? 'Review cloud credentials' : step.form === 'confirm' ? 'Review and approve' : 'Continue');
@@ -158,7 +188,7 @@
     running = control.textContent; control.classList.add('busy'); control.setAttribute('aria-busy', 'true'); show(slot, '');
     let failure = '';
     try { await task(); }
-    catch (error) { const reason = error && error.message || ''; if (reason !== 'INPUT_CANCELLED') failure = ERRORS[reason] || reason || 'The workflow could not be updated.'; }
+    catch (error) { const reason = String(error && error.message || ''); if (reason !== 'INPUT_CANCELLED') failure = readable(reason); }
     // Every wait note goes when the action it waited for ends, beside whichever control showed it.
     waiting.forEach(item => show(item, '')); waiting.clear();
     show(slot, failure);
@@ -171,7 +201,18 @@
     return job;
   }
   async function manage(operationName) { await create(operationName, {deploymentId: chosen, clientId: operationName === 'revokeClient' ? $('clients').value : undefined}); }
-  $('new').onclick = () => action('new', () => create('setup'));
+  // Shows the unfinished setup and opens its question, or resumes it, instead of creating another.
+  async function setup() {
+    // The journal as it is now, not as of the last poll: a setup voice started meanwhile is continued, not doubled.
+    await refresh();
+    const found = unfinished();
+    if (!found) return create('setup');
+    if (chosen !== found.id) { chosen = found.id; new Set(Object.values(SLOTS)).forEach(slot => show(slot, '')); follow(); draw(); }
+    const job = found.current, st = status(job);
+    if (st === 'WAITING_INPUT' && (job.pendingStep || {}).kind === 'input' || st === 'PAUSED' && job.needsCredential === true) await MobileSSH.workflows.review({id: job.id});
+    else if (st === 'PAUSED') await MobileSSH.workflows.resume({id: job.id, revision: job.revision});
+  }
+  $('new').onclick = () => action('new', setup);
   // A picked option gives up the focus: Android WebView would keep it on the closed select, holding back its redraws.
   $('deployments').onchange = () => { chosen = $('deployments').value; new Set(Object.values(SLOTS)).forEach(slot => show(slot, '')); $('deployments').blur(); follow(); draw(); schedule(); };
   $('clients').onchange = () => $('clients').blur();

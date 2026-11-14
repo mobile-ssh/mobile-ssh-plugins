@@ -24,6 +24,13 @@ for the console path; more RAM makes installation and upgrades less constrained.
 3. Select or generate an SSH key. Lightsail requires RSA.
 4. Choose the project, region, plan, image where necessary, and SSH source CIDR.
    The worker checks the selected provider offering using live read-only APIs.
+   A failed check says which setting it could not confirm and why, for example
+   a server type that is sold out in the chosen location, with the locations
+   that have it. Nothing has been created at that point, so its recovery offers
+   changing the settings (each asked again with its current value), checking
+   again, new cloud account credentials, or stopping; never cloud cleanup.
+   A setting that cannot be used, such as a location with a space in it, is
+   asked again at once with the reason.
 5. Review the resources and current provider pricing page. Provisioning begins
    only after native approval. Provider accounts, billing activation, terms,
    capacity and quota approval are completed in the provider's console.
@@ -46,7 +53,9 @@ restores its data copy and the previous version. A failed update says whether
 the image could not be downloaded (nothing changed), the previous version was
 restored, or the rollback also failed (the server's VPN is down); its recovery
 offers a check that changes nothing, a retry, or stopping. An update
-interrupted by a reboot resumes from the copy it took. Deployments created by
+interrupted by a reboot can still roll back from the copy it took, but only
+while nothing can have changed since; adding or revoking a client discards that
+copy, so a rollback never brings back a revoked client. Deployments created by
 VPN Setup 1.0.1 or earlier run 15.4.0 until updated. Revoking the client's
 server key prevents future use of its configuration. Deletion of API-created servers uses the cloud API even when SSH
 is unavailable. Console-created VMs remain the user's cloud resources; the
@@ -55,7 +64,15 @@ to remove the VM and public IP.
 
 The page lists each deployment once, with its recent operations underneath.
 It acts on the deployment's unfinished operation first and offers no new one
-until that operation finishes. Opening the page never starts a setup.
+until that operation finishes. Opening the page never starts a setup. While a
+setup that holds no cloud resource is unfinished, **Set up a VPN** reads
+**Continue VPN setup** and opens that setup's question instead of starting
+another; **Stop workflow** on it is the way to start over. A setup that may
+have sent a create is not continued that way, and once stopped it reads "cloud
+resources may exist", not "nothing created". Setups that VPN Setup 1.0.2 or
+earlier stopped at their checks keep that version's recovery, so they are not
+continued either: the page counts them and suggests **Stop workflow**. The page
+redraws only what changed, and a waiting step's reason stays shown beside it.
 
 Every resource receipt retains its provider ID, ownership and deletion status.
 A lost creation response is reconciled against a stable deployment name;

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Native-only protected wg-easy operations. JSON stdin/stdout may contain secrets."""
 import fcntl
+import filecmp
 import http.cookiejar
 import ipaddress
 import json
@@ -130,14 +131,21 @@ def compose_run(root, *args):
                 "--file", str(root / "compose.json"), *args])
 
 
-def running_image(root):
-    """Image reference the deployment's container was created from, or None."""
+def container_state(root):
+    """Image reference the deployment's container was created from and whether it runs, or (None, False)."""
     try:
-        value = json.loads(run(["docker", "inspect", "--format", "{{json .Config.Image}}",
+        value = json.loads(run(["docker", "inspect", "--format", "[{{json .Config.Image}},{{json .State.Running}}]",
                                 "mobile-ssh-wg-" + root.name]))
     except (OperationError, ValueError):
-        return None
-    return value if isinstance(value, str) else None
+        return None, False
+    if not (isinstance(value, list) and len(value) == 2 and isinstance(value[0], str) and isinstance(value[1], bool)):
+        return None, False
+    return value[0], value[1]
+
+
+def running_image(root):
+    """Image reference the deployment's container was created from, or None."""
+    return container_state(root)[0]
 
 
 class API:
@@ -272,13 +280,17 @@ def copy_directory(source, target):
 # the iptables hooks to an {{interface}} placeholder 15.4.0 does not expand), so the previous
 # version can only run on a copy taken before the new one started. The copy is removed once
 # the new version is verified: it would keep the keys of clients revoked later, and restoring
-# it by hand would bring them back. A copy left by an interrupted update stays until the next
-# verified update or the deployment's deletion removes it.
+# it would bring them back. For that reason a copy left by an interrupted update is restored
+# only while nothing can have changed since it was taken (see update), and a client change
+# or the next update discards it; deleting the deployment removes it too.
 BACKUPS = ("wireguard.previous", "compose.previous.json")
+# Written before a rollback stops the new version, which then stays stopped: if the rollback is
+# interrupted, its copy is still the data from just before this update.
+ROLLBACK = "rollback.pending"
 
 
 def discard_backup(root):
-    for name in (*BACKUPS, "wireguard.previous.tmp", "wireguard.tmp", "wireguard.previous.old", "wireguard.old"):
+    for name in (*BACKUPS, ROLLBACK, "wireguard.previous.tmp", "wireguard.tmp", "wireguard.previous.old", "wireguard.old"):
         path = root / name
         if path.is_dir():
             shutil.rmtree(path)
@@ -291,6 +303,29 @@ def configured_image(path):
         return json.loads(path.read_text())["services"]["wg-easy"]["image"]
     except (OSError, ValueError, KeyError, TypeError):
         return None
+
+
+def same_tree(first, second):
+    """Whether two directories hold the same names, file bytes and symlink targets."""
+    def entries(top):
+        found = {}
+        for directory, folders, files in os.walk(top):
+            for name in folders + files:
+                path = Path(directory) / name
+                found[str(path.relative_to(top))] = path
+        return found
+    filecmp.clear_cache()  # Its results are keyed by size and mtime, which a quick rewrite can keep.
+    left, right = entries(first), entries(second)
+    if left.keys() != right.keys():
+        return False
+    for name, path in left.items():
+        other = right[name]
+        if path.is_symlink() or other.is_symlink():
+            if not (path.is_symlink() and other.is_symlink() and os.readlink(path) == os.readlink(other)):
+                return False
+        elif path.is_dir() != other.is_dir() or path.is_file() and not filecmp.cmp(path, other, shallow=False):
+            return False
+    return True
 
 
 def client_keys(api):
@@ -315,11 +350,19 @@ def update(root, args):
         raise OperationError("Could not download the WireGuard update; the VPN was not changed",
                              "update_not_downloaded") from None
     current = {"healthy": True, "version": image_version(IMAGE), "current": True}
-    backed_up = all((root / name).exists() for name in BACKUPS)
     configured = configured_image(root / "compose.json")
-    if running_image(root) == IMAGE and configured == IMAGE:
-        # Already on the pin. An interrupted update or rollback can leave it stopped: start it
-        # (a no-op when it runs), and fall back to the copy it left if it still does not answer.
+    image, started = container_state(root)
+    if image == IMAGE and configured == IMAGE:
+        # Already on the pin. An interrupted update or rollback can leave it stopped: start it (a
+        # no-op when it runs). A copy left behind is restored if it still does not answer, but only
+        # when nothing can have changed since the copy was taken: the data is still byte-identical
+        # to it, or a rollback was interrupted after stopping the new version, which has not run
+        # since. Otherwise the new version may have served since, and the copy would bring back
+        # what changed meanwhile, such as a revoked client: it is discarded unused.
+        backed_up = all((root / name).exists() for name in BACKUPS) and (
+            (root / ROLLBACK).exists() and not started or same_tree(root / BACKUPS[0], root / "wireguard"))
+        if not backed_up:
+            discard_backup(root)
         try:
             compose_run(root, "up", "-d")
             verify(root, secrets)
@@ -330,36 +373,39 @@ def update(root, args):
             raise OperationError(*ROLLED_BACK) from None
         discard_backup(root)
         return {**current, "updated": False}
-    # With a copy present, compose.json names the pin while the container does not run it only when
-    # an update stopped after taking that copy: it is the only record of the previous version, so keep it.
-    resumed = backed_up and configured == IMAGE
+    # compose.json names the pin while the container does not run it only when an update stopped
+    # after recording the previous version: that record is the only one left, so keep it. The new
+    # version never started on the data, so the data is the previous version's and is copied afresh.
+    resumed = (root / BACKUPS[1]).exists() and configured == IMAGE
     previous = json.loads((root / (BACKUPS[1] if resumed else "compose.json")).read_text())
     try:
         before = client_keys(wait_api(secrets, attempts=1))
     except OperationError:
         before = None  # Not answering, as after an interrupted update: nothing to compare.
-    copied = resumed
+    copied = False
     try:
         # Stop first so the copy holds a consistent database.
         compose_run(root, "stop")
-        if not resumed:
-            copy_directory(root / "wireguard", root / BACKUPS[0])
-            private_json(root / BACKUPS[1], previous)
-            copied = True
+        copy_directory(root / "wireguard", root / BACKUPS[0])
+        private_json(root / BACKUPS[1], previous)
+        (root / ROLLBACK).unlink(missing_ok=True)  # A marker belonged to the copy just replaced.
+        copied = True
         private_json(root / "compose.json", compose(root))
         compose_run(root, "up", "-d", "--force-recreate")
         api = verify(root, secrets)
         if before is not None and client_keys(api) != before:
             raise OperationError("The update changed the WireGuard clients")
     except Exception:
-        restore(root, previous, secrets, copied)
+        restore(root, previous, secrets, copied, before)
         raise OperationError(*ROLLED_BACK) from None
     discard_backup(root)
     return {**current, "updated": True}
 
 
-def restore(root, previous, secrets, copied):
+def restore(root, previous, secrets, copied, before=None):
     try:
+        if copied:
+            (root / ROLLBACK).touch(mode=0o600)
         try:
             compose_run(root, "stop")
         except OperationError:
@@ -368,7 +414,9 @@ def restore(root, previous, secrets, copied):
             copy_directory(root / BACKUPS[0], root / "wireguard")
         private_json(root / "compose.json", previous)
         compose_run(root, "up", "-d", "--force-recreate")
-        verify(root, secrets)
+        api = verify(root, secrets)
+        if before is not None and client_keys(api) != before:
+            raise OperationError("The previous version lists other WireGuard clients")
     except Exception:
         # The copy stays for manual recovery and the next update; delete still removes it.
         raise OperationError("WireGuard update failed and the previous version did not restart; "
@@ -410,14 +458,18 @@ def operate(request):
             version = image_version(running)
             return {"healthy": True, "clients": clients, "image": IMAGE, "current": running == IMAGE,
                     **({"version": version} if version else {})}
+        # A client change makes a copy left by an interrupted update stale: restoring it would undo the change.
         if operation == "createClient":
-            return create_client(root, api, args, request)
+            created = create_client(root, api, args, request)
+            discard_backup(root)
+            return created
         if operation == "revokeClient":
             client_id = str(args.get("clientId", ""))
             if not client_id.isdigit():
                 raise OperationError("Invalid WireGuard client id")
             if any(str(item["id"]) == client_id for item in api.clients()):
                 api.request("DELETE", "/api/client/" + client_id)
+            discard_backup(root)
             return {"revoked": True, "clientId": client_id}
         raise OperationError("Unsupported protected operation")
 

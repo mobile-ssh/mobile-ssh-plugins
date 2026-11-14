@@ -9,15 +9,21 @@ const plain = value => JSON.parse(JSON.stringify(value));
 
 class Element {
   constructor(tag, owner) {
+    // Every visible change is counted: a page at rest must not redraw, relabel or toggle anything.
+    this.changes = 0; this.text = ''; this.isHidden = false;
     this.tagName = tag.toUpperCase(); this.owner = owner; this.children = []; this.value = ''; this.textContent = ''; this.hidden = false;
     this.className = ''; this.attributes = {}; this.rebuilt = 0; this.disabledCount = 0; this.isDisabled = false;
     const classes = new Set();
     this.classList = { add: name => classes.add(name), remove: name => classes.delete(name), contains: name => classes.has(name) };
   }
+  get textContent() { return this.text; }
+  set textContent(value) { value = String(value); if (value !== this.text) { this.text = value; this.changes++; } }
+  get hidden() { return this.isHidden; }
+  set hidden(value) { value = !!value; if (value !== this.isHidden) { this.isHidden = value; this.changes++; } }
   get disabled() { return this.isDisabled; }
   set disabled(value) { if (value && !this.isDisabled) this.disabledCount++; this.isDisabled = !!value; }
   set innerHTML(value) { throw new Error('Application inserted untrusted HTML: ' + value); }
-  replaceChildren(...children) { this.children = children; this.rebuilt++; }
+  replaceChildren(...children) { this.children = children; this.rebuilt++; this.changes++; }
   focus() { this.owner.activeElement = this; }
   // As in a browser, only the focused element reports a blur.
   blur() { if (this.owner.activeElement !== this) return; this.owner.activeElement = null; if (this.onblur) this.onblur(); }
@@ -76,6 +82,8 @@ function harness(initial, options = {}) {
     get: id => elements.get(id), calls, document, root,
     get jobs() { return jobs; }, set jobs(value) { jobs = plain(value); },
     disabled: () => controls().reduce((sum, el) => sum + el.disabledCount, 0),
+    // Visible changes so far, on the page and inside the lists and pickers it built.
+    changes: () => [...elements.values()].reduce((sum, el) => sum + el.changes + el.children.reduce((inner, child) => inner + child.changes, 0), 0),
     // Runs the one background refresh the page scheduled and reports its delay.
     async poll() {
       const live = timers.filter(timer => !timer.cleared && !timer.ran);
@@ -366,4 +374,196 @@ test('a dark host theme brings dark error and muted text even when the WebView r
   assert.equal(light.root.attributes['data-theme'], 'light');
   const older = harness([]); await flush();
   assert.equal(older.root.attributes['data-theme'], undefined);
+});
+
+// A setup stopped by its read-only checks: it waits on the settings question and created nothing.
+const unchecked = (id, minutes, extra = {}) => ({ id: 'setup-' + id, pluginId: 'io.github.mobilessh.vpnsetup', deploymentId: id, operation: 'setup',
+  status: 'WAITING_INPUT', revision: 7, needsCredential: false, createdAt: NOW + minutes * 60000, updatedAt: NOW + minutes * 60000,
+  pendingStep: { kind: 'input', id: id + '-recovery', form: 'recovery', title: 'Check the server settings',
+    message: 'Server type cx23 is sold out in fsn1 right now. Locations with it: nbg1.', fields: [] },
+  ...extra,
+  state: { deploymentId: id, name: 'mssh-' + id, operation: 'setup', provider: 'hetzner', mode: 'automatic', phase: 'recovery', interruptedPhase: 'preflight',
+    inputs: { region: 'fsn1', size: 'cx23' }, resources: {}, error: { code: 'workflow_failed', message: 'Server type cx23 is sold out in fsn1 right now. Locations with it: nbg1.' },
+    ...extra.state } });
+const established = () => [job('health-1', 'health', 'SUCCEEDED', 20), job('setup-alpha', 'setup', 'SUCCEEDED', 10)];
+const made = h => h.calls.filter(call => call[0] === 'create');
+
+test('Set up a VPN continues an unfinished setup that created nothing instead of starting another', async () => {
+  const h = harness([unchecked('gamma', 70), ...established()]); await flush();
+  assert.equal(h.get('new').textContent, 'Continue VPN setup');
+  assert.equal(h.get('new-hint').hidden, false);
+  assert.equal(h.get('title').textContent, 'mssh-gamma');
+  assert.equal(h.get('question').textContent, 'Check the server settings');
+  assert.equal(h.get('problem').textContent, 'Server type cx23 is sold out in fsn1 right now. Locations with it: nbg1.');
+  assert.equal(h.get('problem').hidden, false);
+  // From another VPN too: the button brings the unfinished setup up and opens its question.
+  const select = h.get('deployments'); select.focus(); select.value = 'alpha'; select.onchange(); await flush();
+  assert.equal(h.get('title').textContent, 'mssh-alpha');
+  assert.equal(h.get('new').textContent, 'Continue VPN setup');
+  await h.get('new').click();
+  assert.deepEqual(made(h), []);
+  assert.deepEqual(h.calls.filter(call => call[0] === 'review').map(call => call[1].id), ['setup-gamma']);
+  assert.equal(h.get('title').textContent, 'mssh-gamma');
+  assert.equal(select.value, 'gamma');
+  assert.equal(h.get('new-error').hidden, true);
+  assert.equal(h.get('new').classList.contains('busy'), false);
+});
+
+test('the shown unfinished setup is continued first, otherwise the latest one', async () => {
+  const jobs = [unchecked('older', 30), unchecked('newer', 50), ...established()];
+  const latest = harness(jobs); await flush();
+  const select = latest.get('deployments'); select.focus(); select.value = 'alpha'; select.onchange(); await flush();
+  await latest.get('new').click();
+  assert.deepEqual(latest.calls.filter(call => call[0] === 'review').map(call => call[1].id), ['setup-newer']);
+  const shown = harness(jobs); await flush();
+  const picker = shown.get('deployments'); picker.focus(); picker.value = 'older'; picker.onchange(); await flush();
+  await shown.get('new').click();
+  assert.deepEqual(shown.calls.filter(call => call[0] === 'review').map(call => call[1].id), ['setup-older']);
+  assert.deepEqual(made(latest).concat(made(shown)), []);
+});
+
+test('continuing a paused or running setup resumes it, asks for credentials or just shows it', async () => {
+  const credential = harness([unchecked('gamma', 70, { status: 'PAUSED', needsCredential: true, pendingStep: { kind: 'http', id: 'gamma-preflight-0' } })]);
+  await flush(); await credential.get('new').click();
+  assert.deepEqual(credential.calls.filter(call => ['review', 'resume', 'create'].includes(call[0])).map(call => call[0]), ['review']);
+  const paused = harness([unchecked('gamma', 70, { status: 'PAUSED', pendingStep: null })]);
+  await flush(); await paused.get('new').click();
+  assert.deepEqual(plain(paused.calls.filter(call => ['review', 'resume', 'create'].includes(call[0]))), [['resume', { id: 'setup-gamma', revision: 7 }]]);
+  const running = harness([unchecked('gamma', 70, { status: 'RUNNING', pendingStep: { kind: 'http', id: 'gamma-preflight-0' }, state: { phase: 'preflight' } }), ...established()]);
+  await flush();
+  assert.equal(running.get('new').textContent, 'Continue VPN setup');
+  const select = running.get('deployments'); select.focus(); select.value = 'alpha'; select.onchange(); await flush();
+  await running.get('new').click();
+  assert.deepEqual(running.calls.filter(call => ['review', 'resume', 'create'].includes(call[0])), []);
+  assert.equal(running.get('title').textContent, 'mssh-gamma');
+});
+
+test('a setup holding cloud resources, or a stopped one, does not block a new setup', async () => {
+  const holding = unchecked('gamma', 70, { pendingStep: { kind: 'input', id: 'gamma-recovery', form: 'recovery', title: 'Setup needs attention', fields: [] },
+    state: { interruptedPhase: 'provision', resources: { key: { id: 11, owned: true, status: 'created' } } } });
+  const h = harness([holding, ...established()]); await flush();
+  assert.equal(h.get('new').textContent, 'Set up a VPN');
+  assert.equal(h.get('new-hint').hidden, true);
+  await h.get('new').click();
+  assert.deepEqual(made(h).map(call => call[1].operation), ['setup']);
+  assert.ok(!h.calls.some(call => call[0] === 'review'));
+  // Stop workflow is the way to start over: the stopped setup no longer takes the button.
+  const s = harness([unchecked('gamma', 70)]); await flush();
+  assert.equal(s.get('new').textContent, 'Continue VPN setup');
+  await s.get('cancel').click();
+  s.jobs = [unchecked('gamma', 71, { status: 'CANCELLED' })];
+  await s.poll();
+  assert.equal(s.get('new').textContent, 'Set up a VPN');
+  assert.equal(s.get('status').textContent, 'Setup stopped · nothing created');
+  await s.get('new').click();
+  assert.deepEqual(made(s).map(call => call[1].operation), ['setup']);
+});
+
+test('nothing on the page changes between polls while a setup waits on its settings question', async () => {
+  const h = harness([unchecked('gamma', 70), ...established(), stoppedSetup()]); await flush();
+  assert.equal(h.get('problem').hidden, false);
+  const before = h.changes(), disabled = h.disabled(), rebuilt = ['deployments', 'history', 'resources', 'clients'].map(id => h.get(id).rebuilt);
+  const delays = [];
+  for (let poll = 0; poll < 6; poll++) delays.push(await h.poll());
+  assert.deepEqual(delays, Array(6).fill(10000));
+  assert.equal(h.changes(), before, 'no text, visibility or list changed');
+  assert.deepEqual(['deployments', 'history', 'resources', 'clients'].map(id => h.get(id).rebuilt), rebuilt);
+  assert.equal(h.disabled(), disabled, 'no control was disabled again');
+  // A real change is drawn once and then holds still.
+  h.jobs = [unchecked('gamma', 72, { state: { error: { code: 'workflow_failed', message: 'Hetzner Cloud has no location fsn1.' } } }), ...established(), stoppedSetup()];
+  await h.poll();
+  assert.equal(h.get('problem').textContent, 'Hetzner Cloud has no location fsn1.');
+  const after = h.changes();
+  for (let poll = 0; poll < 3; poll++) await h.poll();
+  assert.equal(h.changes(), after);
+});
+
+test('native error codes are never shown as they are', async () => {
+  for (const [code, shown] of [['NATIVE_REVIEW_REQUIRED', 'The workflow could not be updated. Try again.'], ['INPUT_CANCELLED', ''],
+    ['NO_PENDING_INPUT', 'This step no longer needs an answer.'], ['Workflow not found', 'Workflow not found']]) {
+    const h = harness([unchecked('gamma', 70)], { review: async () => { throw new Error(code); } }); await flush();
+    await h.get('new').click();
+    assert.equal(h.get('new-error').textContent, shown, code);
+    assert.equal(h.get('new-error').hidden, !shown, code);
+    await h.get('review').click();
+    assert.equal(h.get('job-error').textContent, shown, code);
+  }
+});
+
+// As VPN Setup 1.0.0-1.0.2 left a setup its checks stopped: a recovery with no message, whose default checks again.
+const olderCheck = (id, minutes) => unchecked(id, minutes, {
+  pendingStep: { kind: 'input', id: id + '-recovery', form: 'recovery', title: 'Setup needs attention', fields: [] },
+  state: { error: { code: 'workflow_failed', message: 'Droplet region and size could not be verified. Check account permissions, region, plan and Ubuntu 24.04 image.' } } });
+
+test('setups an older VPN Setup stopped at its checks are not continued, and the page says how to clear them', async () => {
+  const one = harness([olderCheck('old1', 30), ...established()]); await flush();
+  assert.equal(one.get('new').textContent, 'Set up a VPN');
+  assert.equal(one.get('new-hint').hidden, false);
+  assert.equal(one.get('new-hint').textContent, 'An earlier setup stopped at its checks and created nothing. Choose Stop workflow on it to clear it.');
+  // Its reason still shows when it is the VPN on the page.
+  assert.equal(one.get('title').textContent, 'mssh-old1');
+  assert.equal(one.get('problem').textContent, 'Droplet region and size could not be verified. Check account permissions, region, plan and Ubuntu 24.04 image.');
+  await one.get('new').click();
+  assert.deepEqual(made(one).map(call => call[1].operation), ['setup']);
+  assert.ok(!one.calls.some(call => call[0] === 'review'));
+  const three = harness([olderCheck('old1', 30), olderCheck('old2', 31), olderCheck('old3', 32), ...established()]); await flush();
+  assert.equal(three.get('new-hint').textContent, '3 earlier setups stopped at their checks and created nothing. Choose Stop workflow on each to clear them.');
+  // A setup of this version beside them is the one continued, with its own hint.
+  const mixed = harness([olderCheck('old1', 30), unchecked('gamma', 20)]); await flush();
+  assert.equal(mixed.get('new').textContent, 'Continue VPN setup');
+  assert.equal(mixed.get('new-hint').textContent, 'This continues your unfinished setup. To start over instead, choose Stop workflow on it first.');
+  await mixed.get('new').click();
+  assert.deepEqual(mixed.calls.filter(call => call[0] === 'review').map(call => call[1].id), ['setup-gamma']);
+});
+
+test('Set up a VPN reads the journal first: a setup started since the last poll is continued, not doubled', async () => {
+  const h = harness(established()); await flush();
+  assert.equal(h.get('new').textContent, 'Set up a VPN');
+  // Voice started a setup; the page has not polled since.
+  h.jobs = [unchecked('gamma', 70, { pendingStep: { kind: 'input', id: 'gamma-provider', form: 'provider', title: 'Where should your VPN run?', fields: [] },
+    state: { phase: 'provider', interruptedPhase: undefined, error: null } }), ...established()];
+  await h.get('new').click();
+  assert.deepEqual(made(h), []);
+  assert.deepEqual(h.calls.filter(call => call[0] === 'review').map(call => call[1].id), ['setup-gamma']);
+  assert.equal(h.get('title').textContent, 'mssh-gamma');
+});
+
+test('a setup whose create may be under way is not offered as nothing created', async () => {
+  const cut = unchecked('gamma', 70, { status: 'PAUSED', pendingStep: { kind: 'http', id: 'gamma-provision-0-create-0', method: 'POST' },
+    state: { phase: 'provision', interruptedPhase: undefined, error: null } });
+  const h = harness([cut, ...established()]); await flush();
+  assert.equal(h.get('new').textContent, 'Set up a VPN');
+  assert.equal(h.get('new-hint').hidden, true);
+  for (const [stopped, why] of [
+    [{ ...cut, status: 'CANCELLED' }, 'POST cut off, then Stop workflow'],
+    [unchecked('gamma', 71, { status: 'SUCCEEDED', pendingStep: null, state: { phase: 'cancelled', interruptedPhase: 'provision' } }), 'kept after a failed create'],
+    [unchecked('gamma', 71, { status: 'CANCELLED', pendingStep: null, state: { phase: 'wait', interruptedPhase: undefined } }), 'stopped while waiting for the server']]) {
+    const s = harness([stopped]); await flush();
+    assert.equal(s.get('status').textContent, 'Setup stopped · cloud resources may exist', why);
+    assert.equal(s.get('new').textContent, 'Set up a VPN', why);
+  }
+  // Stopped at its checks: nothing was sent that creates anything.
+  const checks = harness([unchecked('gamma', 71, { status: 'CANCELLED' })]); await flush();
+  assert.equal(checks.get('status').textContent, 'Setup stopped · nothing created');
+});
+
+test('a setting asked again shows why under its question', async () => {
+  const reason = 'Use only letters, digits, dots, underscores, colons and hyphens, with no spaces.';
+  const h = harness([unchecked('gamma', 70, { pendingStep: { kind: 'input', id: 'gamma-options-0', form: 'instance', title: 'Location', message: reason,
+    error: { code: 'invalid_setting', message: reason }, fields: [{ key: 'region', label: 'Location', default: 'fsn1' }] }, state: { phase: 'options' } })]);
+  await flush();
+  assert.equal(h.get('question').textContent, 'Location');
+  assert.equal(h.get('problem').textContent, reason);
+  assert.equal(h.get('problem').hidden, false);
+});
+
+test('native codes a retry cannot change say so, and stale answers read as a change', async () => {
+  for (const [code, shown] of [['STALE_WORKFLOW_ANSWER', 'The workflow changed in the meantime. Check its current state and try again.'],
+    ['WORKFLOW_RUNTIME_UNAVAILABLE', 'This version of Mobile SSH can\'t run this step. Update Mobile SSH.'],
+    ['CREDENTIAL_FORM_REQUIRED', 'This version of Mobile SSH can\'t run this step. Update Mobile SSH.'],
+    ['constructor', 'constructor'], ['toString', 'toString']]) {
+    const h = harness([unchecked('gamma', 70)], { review: async () => { throw new Error(code); } }); await flush();
+    await h.get('review').click();
+    assert.equal(h.get('job-error').textContent, shown, code);
+  }
 });

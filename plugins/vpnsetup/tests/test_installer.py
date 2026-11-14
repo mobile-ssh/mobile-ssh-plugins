@@ -49,7 +49,7 @@ class Host:
         if argv[:2] == ["docker", "inspect"]:
             if self.running is None:
                 raise vpn.OperationError("Command failed: docker")
-            return json.dumps(self.running) + "\n"
+            return json.dumps([self.running, self.started]) + "\n"
         if argv[:2] == ["docker", "exec"]:
             if not self.started or self.running in self.broken:
                 raise vpn.OperationError("Command failed: docker")
@@ -287,9 +287,11 @@ class InstallerTests(unittest.TestCase):
             self.assertEqual(host.files(), ["compose.json", "credentials.json", "initialized", "wireguard"])
             host.broken.add(vpn.IMAGE)
             (host.root / "wireguard.previous").mkdir()
+            vpn.private_json(host.root / "compose.previous.json", {})
             with self.assertRaisesRegex(vpn.OperationError, "API is unavailable"):
                 self.update(host)
-            self.assertIn("wireguard.previous", host.files(), "an unverified update keeps its copy")
+            self.assertEqual(host.files(), ["compose.json", "credentials.json", "initialized", "wireguard"],
+                             "a copy the running data has moved on from is discarded, never restored")
 
     def test_update_starts_a_current_deployment_left_stopped(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -320,7 +322,8 @@ class InstallerTests(unittest.TestCase):
                 with self.assertRaisesRegex(vpn.OperationError, "^WireGuard update failed; the previous version was restored$") as raised:
                     self.update(host)
                 self.assertEqual(raised.exception.code, "update_rolled_back")
-                # The retry neither copied again nor replaced compose.previous.json; 15.4.0 came back on its own data.
+                # The retry kept compose.previous.json, the only record of 15.4.0, and copied the 15.4.0 data
+                # (which 15.5.0 never started on) afresh; 15.4.0 came back on it.
                 self.assertEqual(host.commands(), ["pull", "inspect", "stop", "up", "stop", "up", "exec"])
                 self.assertEqual((host.running, host.started, host.image()), (OLD, True, OLD))
                 self.assertEqual((host.root / "wireguard" / "wg-easy.db").read_text(), "schema 15.4.0")
@@ -332,20 +335,24 @@ class InstallerTests(unittest.TestCase):
             self.assertEqual(host.at_start[-1], (vpn.IMAGE, "schema 15.4.0", 0o700))
             self.assertEqual(host.files(), ["compose.json", "credentials.json", "initialized", "wireguard"])
 
+    def interrupt_rollback(self, host):
+        real = vpn.copy_directory
+
+        def copy(source, target):
+            if target.name == "wireguard":
+                raise SystemExit("power lost")  # Rollback stopped 15.5.0, then the VM went down.
+            real(source, target)
+        with patch.object(vpn, "copy_directory", side_effect=copy), self.assertRaises(SystemExit):
+            self.update(host)
+        self.assertEqual((host.running, host.started, host.image()), (vpn.IMAGE, False, vpn.IMAGE))
+        self.assertEqual((host.root / "wireguard" / "wg-easy.db").read_text(), "schema 15.5.0")
+        self.assertIn(vpn.ROLLBACK, host.files())
+
     def test_update_after_an_interrupted_rollback_restores_the_copy(self):
         for recovered in (False, True):
             with self.subTest(recovered=recovered), tempfile.TemporaryDirectory() as directory:
                 host = Host(Path(directory) / "dep", broken=[vpn.IMAGE])
-                real = vpn.copy_directory
-
-                def copy(source, target):
-                    if target.name == "wireguard":
-                        raise SystemExit("power lost")  # Rollback stopped 15.5.0, then the VM went down.
-                    real(source, target)
-                with patch.object(vpn, "copy_directory", side_effect=copy), self.assertRaises(SystemExit):
-                    self.update(host)
-                self.assertEqual((host.running, host.started, host.image()), (vpn.IMAGE, False, vpn.IMAGE))
-                self.assertEqual((host.root / "wireguard" / "wg-easy.db").read_text(), "schema 15.5.0")
+                self.interrupt_rollback(host)
                 host.calls = []
                 if recovered:  # 15.5.0 failed for a passing reason: it now answers and keeps the migrated data.
                     host.broken.clear()
@@ -360,6 +367,113 @@ class InstallerTests(unittest.TestCase):
                     self.assertEqual((host.running, host.started, host.image()), (OLD, True, OLD))
                     self.assertEqual((host.root / "wireguard" / "wg-easy.db").read_text(), "schema 15.4.0")
                 self.assertEqual(host.files(), ["compose.json", "credentials.json", "initialized", "wireguard"])
+
+    def test_an_interrupted_rollback_whose_new_version_ran_again_is_not_finished(self):
+        with tempfile.TemporaryDirectory() as directory:
+            host = Host(Path(directory) / "dep", broken=[vpn.IMAGE])
+            self.interrupt_rollback(host)
+            host.started = True  # Started by hand since: it may have served, and changed clients.
+            host.calls = []
+            with self.assertRaisesRegex(vpn.OperationError, "API is unavailable"):
+                self.update(host)
+            self.assertEqual(host.commands(), ["pull", "inspect", "up"])
+            self.assertEqual((host.running, host.image()), (vpn.IMAGE, vpn.IMAGE))
+            self.assertEqual((host.root / "wireguard" / "wg-easy.db").read_text(), "schema 15.5.0")
+            self.assertEqual(host.files(), ["compose.json", "credentials.json", "initialized", "wireguard"])
+
+    def test_a_copy_the_new_version_has_run_past_is_never_restored(self):
+        for container in ("running", "stopped"):
+            with self.subTest(container=container), tempfile.TemporaryDirectory() as directory:
+                host = Host(Path(directory) / "dep")
+                # The session drops while 15.5.0 is verified: it keeps running, unverified, and its copy stays.
+                host.crash = lambda argv: argv[:2] == ["docker", "exec"]
+                with self.assertRaises(SystemExit):
+                    self.update(host)
+                host.crash = None
+                self.assertEqual((host.root / "wireguard.previous" / "wg-easy.db").read_text(), "schema 15.4.0")
+                self.assertNotIn(vpn.ROLLBACK, host.files())
+                # Meanwhile a client was revoked on 15.5.0 (in its admin page), and later 15.5.0 stopped answering.
+                (host.root / "wireguard" / "revoked").write_text("client 2")
+                host.started = container == "running"
+                host.broken.add(vpn.IMAGE)
+                host.calls = []
+                with self.assertRaisesRegex(vpn.OperationError, "API is unavailable") as raised:
+                    self.update(host)
+                self.assertEqual(raised.exception.code, "vpn_operation_failed")
+                self.assertEqual(host.commands(), ["pull", "inspect", "up"])
+                self.assertEqual((host.running, host.image()), (vpn.IMAGE, vpn.IMAGE))
+                self.assertEqual((host.root / "wireguard" / "revoked").read_text(), "client 2")
+                self.assertEqual(host.files(), ["compose.json", "credentials.json", "initialized", "wireguard"])
+
+    def test_a_copy_identical_to_the_data_is_restored(self):
+        with tempfile.TemporaryDirectory() as directory:
+            host = Host(Path(directory) / "dep", broken=[vpn.IMAGE])
+            # Compose created the 15.5.0 container, then power was lost before it started: the data is untouched.
+            vpn.copy_directory(host.root / "wireguard", host.root / "wireguard.previous")
+            vpn.private_json(host.root / "compose.previous.json", json.loads((host.root / "compose.json").read_text()))
+            vpn.private_json(host.root / "compose.json", vpn.compose(host.root))
+            host.running, host.started = vpn.IMAGE, False
+            with self.assertRaisesRegex(vpn.OperationError, "previous version was restored$"):
+                self.update(host)
+            self.assertEqual((host.running, host.image()), (OLD, OLD))
+            self.assertEqual((host.root / "wireguard" / "wg-easy.db").read_text(), "schema 15.4.0")
+            self.assertEqual(host.files(), ["compose.json", "credentials.json", "initialized", "wireguard"])
+
+    def test_client_changes_discard_a_copy_left_by_an_interrupted_update(self):
+        class API:
+            def __init__(self):
+                self.items = [{"id": 1, "name": "Mobile SSH dep-0", "enabled": True, "publicKey": "a"}]
+
+            def clients(self):
+                return self.items
+
+            def request(self, method, path, data=None, raw=False):
+                if method == "POST":
+                    self.items = self.items + [{"id": 2, "name": data["name"], "enabled": True, "publicKey": "b"}]
+                if method == "DELETE":
+                    self.items = [item for item in self.items if str(item["id"]) != path.rsplit("/", 1)[1]]
+                return "[Interface]\n[Peer]\n" if raw else {}
+        for operation, args, result in (("createClient", {"clientKey": "dep-1"}, "clientId"), ("revokeClient", {"clientId": "1"}, "revoked")):
+            with self.subTest(operation=operation), tempfile.TemporaryDirectory() as directory:
+                base = Path(directory) / "base"
+                base.mkdir(mode=0o700)
+                host = Host(base / "dep", running=vpn.IMAGE)
+                (host.root / "wireguard.previous").mkdir()
+                vpn.private_json(host.root / "compose.previous.json", {})
+                (host.root / vpn.ROLLBACK).touch()
+                with patch.object(vpn, "BASE", base), patch.object(vpn.os, "geteuid", return_value=0), \
+                        patch.object(vpn, "run", side_effect=host.run), patch.object(vpn, "wait_api", return_value=API()):
+                    self.assertIn(result, vpn.operate({"deploymentId": "dep", "operation": operation, "args": args}))
+                self.assertEqual(host.files(), ["compose.json", "credentials.json", "initialized", "lock", "wireguard"])
+
+    def test_rollback_requires_the_clients_from_before_the_update(self):
+        with tempfile.TemporaryDirectory() as directory:
+            host = Host(Path(directory) / "dep", broken=[vpn.IMAGE])
+            # The restored 15.4.0 answers, but no longer lists the client it had before the update.
+            host.crash = lambda argv: argv[6:7] == ["stop"] and host.drops.add(OLD)
+            with self.assertRaisesRegex(vpn.OperationError, "previous version did not restart") as raised:
+                self.update(host)
+            self.assertEqual(raised.exception.code, "update_restore_failed")
+            self.assertEqual(host.running, OLD)
+            self.assertEqual((host.root / "wireguard.previous" / "wg-easy.db").read_text(), "schema 15.4.0")
+
+    def test_same_tree_compares_names_bytes_and_link_targets(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+
+            def tree(name, data=b"same", link="sub/wg-easy.db", extra=False):
+                (root / name / "sub").mkdir(parents=True)
+                (root / name / "sub" / "wg-easy.db").write_bytes(data)
+                os.symlink(link, root / name / "link")
+                if extra:
+                    (root / name / "extra").write_text("x")
+                return root / name
+            original = tree("original")
+            self.assertTrue(vpn.same_tree(original, tree("copy")))
+            self.assertFalse(vpn.same_tree(original, tree("bytes", data=b"diff")))
+            self.assertFalse(vpn.same_tree(original, tree("link", link="sub")))
+            self.assertFalse(vpn.same_tree(original, tree("extra", extra=True)))
+            self.assertFalse(vpn.same_tree(tree("extra2", extra=True), original))
 
     def test_update_that_loses_a_client_is_rolled_back(self):
         with tempfile.TemporaryDirectory() as directory:

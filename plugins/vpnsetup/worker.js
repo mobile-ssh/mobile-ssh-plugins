@@ -272,54 +272,127 @@
     throw new Error('Unsupported provider');
   }
 
+  // Preflight reasons are shown on the page and in the native review and spoken by the voice. Provider data
+  // enters them only as identifier-like values (8 at most); the user's own validated settings are capped.
+  const safe=v=>(typeof v==='string'||typeof v==='number')&&/^[A-Za-z0-9_.:-]{1,40}$/.test(String(v))?String(v):'';
+  const shown=v=>{const t=String(v==null?'':v);return t.length>40?t.slice(0,37)+'...':t;};
+  function names(values) {
+    const all=[...new Set(values.map(safe).filter(Boolean))];
+    return all.slice(0,8).join(', ')+(all.length>8?' and '+(all.length-8)+' more':'');
+  }
+  const items=v=>Array.isArray(v)?v.filter(x=>x&&typeof x==='object'):[];
   function preflight(s) {
     const p=s.inputs,req=(url)=>request(s,'GET',url), checks=[];
-    const check=(label,request,validate)=>checks.push({label,request,validate:validate||(()=>true)});
+    const size=shown(p.size),region=shown(p.region),zone=shown(p.zone);
+    // problem(body, response) is '' once the setting is verified, otherwise one short self-contained reason.
+    const check=(label,request,problem)=>checks.push({label,request,problem:problem||(()=>'')});
     if(s.provider==='gcp') {
       const b='https://compute.googleapis.com/compute/v1/projects/'+enc(p.projectId);
-      check('Machine type',req(b+'/zones/'+enc(p.zone)+'/machineTypes/'+enc(p.size)),b=>b.name===p.size);
-      check('Ubuntu image',req('https://compute.googleapis.com/compute/v1/projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64'),b=>b.status==='READY');
+      check('Machine type',req(b+'/zones/'+enc(p.zone)+'/machineTypes/'+enc(p.size)),b=>b.name===p.size?'':'Google Cloud did not confirm machine type '+size+' in zone '+zone+'.');
+      check('Ubuntu image',req('https://compute.googleapis.com/compute/v1/projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64'),
+        b=>b.status==='READY'?'':'Google Cloud\'s Ubuntu 24.04 image is not ready'+(safe(b.status)?' (status '+safe(b.status)+')':'')+'.');
     } else if(s.provider==='aws') {
       const aws=(action,body)=>request(s,'POST','https://lightsail.'+p.region+'.amazonaws.com/',body,{readOnly:true,
         headers:{'Content-Type':'application/x-amz-json-1.1','X-Amz-Target':'Lightsail_20161128.'+action},
         auth:{scheme:'aws',credentialRef:s.credentialRef,service:'lightsail',region:p.region}});
-      check('Lightsail bundle',aws('GetBundles',{includeInactive:false}),b=>list(b,'bundles').some(x=>x.bundleId===p.size&&x.isActive));
-      check('Ubuntu image',aws('GetBlueprints',{includeInactive:false}),b=>list(b,'blueprints').some(x=>x.blueprintId==='ubuntu_24_04'&&x.isActive));
-      check('Availability zone',aws('GetRegions',{includeAvailabilityZones:true}),b=>list(b,'regions').some(x=>x.name===p.region&&(x.availabilityZones||[]).some(z=>z.zoneName===p.zone)));
+      check('Lightsail bundle',aws('GetBundles',{includeInactive:false}),b=>{
+        const bundle=items(get(b,'bundles')).find(x=>x.bundleId===p.size);
+        return !bundle?'Lightsail has no bundle '+size+' in '+region+'.':bundle.isActive?'':'Lightsail bundle '+size+' is no longer offered.';
+      });
+      check('Ubuntu image',aws('GetBlueprints',{includeInactive:false}),b=>items(get(b,'blueprints')).some(x=>x.blueprintId==='ubuntu_24_04'&&x.isActive)?'':
+        'Lightsail does not offer the Ubuntu 24.04 blueprint in '+region+'.');
+      check('Availability zone',aws('GetRegions',{includeAvailabilityZones:true}),b=>{
+        const area=items(get(b,'regions')).find(x=>x.name===p.region),zones=area?items(area.availabilityZones).map(z=>z.zoneName):[];
+        if(!area)return 'Lightsail has no region '+region+'.';
+        return zones.includes(p.zone)?'':'Availability zone '+zone+' is not in Lightsail region '+region+'.'+(names(zones)?' Zones there: '+names(zones)+'.':'');
+      });
     } else if(s.provider==='azure') {
-      check('Subscription',req('https://management.azure.com/subscriptions/'+enc(p.subscriptionId)+'?api-version=2022-12-01'),b=>b.state==='Enabled');
-      check('VM size',req('https://management.azure.com/subscriptions/'+enc(p.subscriptionId)+'/providers/Microsoft.Compute/locations/'+enc(p.region)+'/vmSizes?api-version=2024-07-01'),b=>list(b,'value').some(x=>x.name===p.size));
+      check('Subscription',req('https://management.azure.com/subscriptions/'+enc(p.subscriptionId)+'?api-version=2022-12-01'),
+        b=>b.state==='Enabled'?'':safe(b.state)?'The Azure subscription is '+safe(b.state)+', not Enabled.':'Azure did not confirm that the subscription is enabled.');
+      check('VM size',req('https://management.azure.com/subscriptions/'+enc(p.subscriptionId)+'/providers/Microsoft.Compute/locations/'+enc(p.region)+'/vmSizes?api-version=2024-07-01'),b=>{
+        const sizes=items(get(b,'value'));
+        return sizes.some(x=>x.name===p.size)?'':sizes.length?'VM size '+size+' isn\'t offered in '+region+'.':'Azure listed no VM sizes in '+region+'. Check the region name.';
+      });
     } else if(s.provider==='digitalocean') {
-      check('Droplet region and size',req('https://api.digitalocean.com/v2/sizes?per_page=200'),b=>list(b,'sizes').some(x=>x.slug===p.size&&x.available&&(x.regions||[]).includes(p.region)));
-      check('Ubuntu image',req('https://api.digitalocean.com/v2/images/ubuntu-24-04-x64'),b=>!!get(b,'image.id'));
+      const url='https://api.digitalocean.com/v2/sizes?per_page=200';
+      check('Droplet region and size',req(url),(b,response)=>{
+        const sizes=items(get(b,'sizes')),found=sizes.find(x=>x.slug===p.size),regions=found&&Array.isArray(found.regions)?found.regions:[];
+        // Listing sizes needs the sizes:read and regions:read scopes.
+        if(!sizes.length)return 'DigitalOcean listed no Droplet sizes. The token may lack read access to sizes and regions.';
+        if(!found)return incompleteList(s,b,response,sizes,url)?'DigitalOcean listed only part of its Droplet sizes, without '+size+'. Check again later.':'DigitalOcean has no Droplet size '+size+'.';
+        if(!found.available)return 'Droplet size '+size+' isn\'t available to this account for new Droplets.';
+        if(!regions.includes(p.region))return 'Droplet size '+size+' isn\'t offered in '+region+'.'+(names(regions)?' Regions with it: '+names(regions)+'.':' No region has it right now.');
+        return '';
+      });
+      check('Ubuntu image',req('https://api.digitalocean.com/v2/images/ubuntu-24-04-x64'),b=>get(b,'image.id')?'':
+        'DigitalOcean did not return its Ubuntu 24.04 image. The token may lack read access to images.');
     } else if(s.provider==='hetzner') {
-      check('Server type in selected location',req('https://api.hetzner.cloud/v1/server_types?name='+enc(p.size)),b=>list(b,'server_types').some(x=>{
-        if(x.name!==p.size||x.architecture!=='x86')return false;
+      check('Server type in selected location',req('https://api.hetzner.cloud/v1/server_types?name='+enc(p.size)),b=>{
+        const type=items(get(b,'server_types')).find(x=>x.name===p.size);
+        if(!type)return 'Hetzner Cloud has no server type '+size+'.';
+        if(type.architecture!=='x86')return 'Server type '+size+' is not an x86 type'+(safe(type.architecture)?' (it is '+safe(type.architecture)+')':'')+'. Choose an x86 server type.';
         // Older API snapshots omit locations entirely. Current responses must
         // explicitly advertise capacity in the selected location; availability
         // elsewhere, a missing entry or a malformed flag does not authorize it.
-        if(!Object.prototype.hasOwnProperty.call(x,'locations'))return true;
-        return Array.isArray(x.locations)&&x.locations.some(location=>location&&location.name===p.region&&location.available===true);
-      }));
-      check('Location',req('https://api.hetzner.cloud/v1/locations?name='+enc(p.region)),b=>list(b,'locations').some(x=>x.name===p.region));
+        if(!Object.prototype.hasOwnProperty.call(type,'locations'))return '';
+        if(!Array.isArray(type.locations))return 'Hetzner did not list where server type '+size+' can be ordered.';
+        const locations=items(type.locations),here=locations.find(x=>x.name===p.region);
+        if(here&&here.available===true)return '';
+        // Since 2026-04-01 each entry says whether it can be ordered now; recommended locations are named first.
+        const open=locations.filter(x=>x.available===true&&x.name!==p.region).sort((a,b)=>(b.recommended===true)-(a.recommended===true)).map(x=>x.name);
+        const elsewhere=names(open)?' Locations with it: '+names(open)+'.':' No location has it right now.';
+        if(!here)return 'Server type '+size+' isn\'t offered in '+region+'.'+elsewhere;
+        if(here.available===false)return (here.deprecation?'Server type '+size+' is being retired in '+region+' and can\'t be ordered there.':
+          'Server type '+size+' is sold out in '+region+' right now.')+elsewhere;
+        return 'Hetzner did not confirm that server type '+size+' can be ordered in '+region+'.'+elsewhere;
+      });
+      check('Location',req('https://api.hetzner.cloud/v1/locations?name='+enc(p.region)),b=>items(get(b,'locations')).some(x=>x.name===p.region)?'':'Hetzner Cloud has no location '+region+'.');
     } else if(s.provider==='linode') {
-      check('Instance plan',req('https://api.linode.com/v4/linode/types/'+enc(p.size)),b=>b.id===p.size);
-      check('Ubuntu image',req('https://api.linode.com/v4/images/linode/ubuntu24.04'),b=>b.id==='linode/ubuntu24.04');
-      check('Region',req('https://api.linode.com/v4/regions/'+enc(p.region)),b=>b.status==='ok');
+      check('Instance plan',req('https://api.linode.com/v4/linode/types/'+enc(p.size)),b=>b.id===p.size?'':'Linode has no plan '+size+'.');
+      check('Ubuntu image',req('https://api.linode.com/v4/images/linode/ubuntu24.04'),b=>b.id==='linode/ubuntu24.04'?'':'Linode did not return its Ubuntu 24.04 image.');
+      check('Region',req('https://api.linode.com/v4/regions/'+enc(p.region)),b=>b.status==='ok'?'':'Linode region '+region+' is not available right now'+(safe(b.status)?' (status '+safe(b.status)+')':'')+'.');
     } else if(s.provider==='vultr') {
-      check('Ubuntu image',req('https://api.vultr.com/v2/os?per_page=500'),b=>list(b,'os').some(x=>String(x.id)===p.imageId&&/ubuntu/i.test(x.name)&&/24\.04/.test(x.name)&&x.arch==='x64'));
-      check('Instance plan',req('https://api.vultr.com/v2/plans?per_page=500'),b=>list(b,'plans').some(x=>x.id===p.size&&(x.locations||[]).includes(p.region)));
+      check('Ubuntu image',req('https://api.vultr.com/v2/os?per_page=500'),b=>{
+        const os=items(get(b,'os')),ubuntu=x=>/ubuntu/i.test(x.name)&&/24\.04/.test(x.name)&&x.arch==='x64',found=os.find(x=>String(x.id)===p.imageId);
+        if(found&&ubuntu(found))return '';
+        const hint=names(os.filter(ubuntu).map(x=>x.id));
+        return (found?'Vultr OS ID '+shown(p.imageId)+' is not Ubuntu 24.04 x64.':'Vultr has no OS ID '+shown(p.imageId)+'.')+(hint?' Ubuntu 24.04 x64 is OS ID '+hint+'.':'');
+      });
+      check('Instance plan',req('https://api.vultr.com/v2/plans?per_page=500'),b=>{
+        const plan=items(get(b,'plans')).find(x=>x.id===p.size),regions=plan&&Array.isArray(plan.locations)?plan.locations:[];
+        if(!plan)return 'Vultr has no plan '+size+'.';
+        return regions.includes(p.region)?'':'Vultr plan '+size+' isn\'t offered in '+region+'.'+(names(regions)?' Regions with it: '+names(regions)+'.':'');
+      });
     } else if(s.provider==='oci') {
-      check('Ubuntu image',req('https://iaas.'+p.region+'.oraclecloud.com/20160918/images/'+enc(p.imageId)),b=>/ubuntu/i.test(b.operatingSystem||'')&&/24\.04/.test(b.operatingSystemVersion||''));
-      check('Instance shape',req('https://iaas.'+p.region+'.oraclecloud.com/20160918/shapes?compartmentId='+enc(p.compartmentId)+'&availabilityDomain='+enc(p.zone)+'&imageId='+enc(p.imageId)),b=>Array.isArray(b)&&b.some(x=>x.shape===p.size));
+      check('Ubuntu image',req('https://iaas.'+p.region+'.oraclecloud.com/20160918/images/'+enc(p.imageId)),
+        b=>/ubuntu/i.test(b.operatingSystem||'')&&/24\.04/.test(b.operatingSystemVersion||'')?'':'The selected Oracle Cloud image is not Ubuntu 24.04.');
+      check('Instance shape',req('https://iaas.'+p.region+'.oraclecloud.com/20160918/shapes?compartmentId='+enc(p.compartmentId)+'&availabilityDomain='+enc(p.zone)+'&imageId='+enc(p.imageId)),b=>{
+        const shapes=items(b).map(x=>x.shape);
+        return shapes.includes(p.size)?'':'Shape '+size+' isn\'t offered with this image in availability domain '+zone+'.'+(names(shapes)?' Shapes there: '+names(shapes)+'.':'');
+      });
     } else if(s.provider==='ovh') {
       const base='https://'+(p.endpoint==='ca'?'ca.api.ovh.com':p.endpoint==='us'?'api.us.ovhcloud.com':'eu.api.ovh.com')+'/1.0/cloud/project/'+enc(p.projectId);
-      check('Ubuntu image',req(base+'/image?region='+enc(p.region)),b=>Array.isArray(b)&&b.some(x=>x.id===p.imageId&&/ubuntu/i.test(x.name)&&/24\.04/.test(x.name)));
-      check('Instance flavor',req(base+'/flavor?region='+enc(p.region)),b=>Array.isArray(b)&&b.some(x=>x.id===p.size&&x.available!==false));
+      check('Ubuntu image',req(base+'/image?region='+enc(p.region)),b=>{
+        const image=items(b).find(x=>x.id===p.imageId);
+        if(!image)return 'OVHcloud has no image with the selected ID in '+region+'.';
+        return /ubuntu/i.test(image.name)&&/24\.04/.test(image.name)?'':'The selected OVHcloud image is not Ubuntu 24.04.';
+      });
+      check('Instance flavor',req(base+'/flavor?region='+enc(p.region)),b=>{
+        const flavor=items(b).find(x=>x.id===p.size);
+        if(!flavor)return 'OVHcloud has no flavor with the selected ID in '+region+'.';
+        return flavor.available!==false?'':(safe(flavor.name)?'OVHcloud flavor '+safe(flavor.name):'The selected OVHcloud flavor')+' is sold out in '+region+' right now.';
+      });
     } else if(s.provider==='scaleway') {
       const b='https://api.scaleway.com/instance/v1/zones/'+enc(p.zone);
-      check('Ubuntu image',req(b+'/images/'+enc(p.imageId)),x=>get(x,'image.arch')==='x86_64'&&/ubuntu/i.test(get(x,'image.name',''))&&/24\.04|noble/i.test(get(x,'image.name','')));
-      check('Instance type',req(b+'/products/servers'),x=>!!get(x,'servers.'+p.size));
+      check('Ubuntu image',req(b+'/images/'+enc(p.imageId)),x=>{
+        const arch=get(x,'image.arch'),name=String(get(x,'image.name',''));
+        if(arch!=='x86_64')return 'The selected Scaleway image is not for x86_64'+(safe(arch)?' (it is '+safe(arch)+')':'')+'.';
+        return /ubuntu/i.test(name)&&/24\.04|noble/i.test(name)?'':'The selected Scaleway image is not Ubuntu 24.04.';
+      });
+      check('Instance type',req(b+'/products/servers'),x=>{
+        const servers=get(x,'servers',{});
+        return typeof servers==='object'&&Object.prototype.hasOwnProperty.call(servers,p.size)&&servers[p.size]?'':'Scaleway has no instance type '+size+' in '+zone+'.';
+      });
     }
     return checks;
   }
@@ -426,17 +499,27 @@
     return s.provider==='hetzner'&&s.httpStage==='delete'&&op.key!=='address'&&
       ((status===422&&code==='resource_in_use')||((status===409||status===423)&&(code==='locked'||code==='conflict')));
   }
+  // A setup stopped by its read-only checks before anything was created.
+  function unchecked(s) {
+    return s.operation==='setup'&&s.interruptedPhase==='preflight'&&!Object.values(s.resources||{}).some(x=>x&&x.owned&&x.status!=='deleted');
+  }
   function absentCreation(s) {
     if(s.allowRecreate){delete s.allowRecreate;delete s.creationAbsent;s.httpStage='create';return render(s);}
     s.creationAbsent=true;
     return pause(s,'No matching cloud resource was found. Review the cloud console before approving a new creation attempt.');
   }
+  const ipv4Cidr=value=>{const parts=value.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})\/(\d{1,2})$/);return !!parts&&!parts.slice(1,5).some(x=>Number(x)>255)&&Number(parts[5])<=32;};
+  // Why an answered setting cannot be used, or '': cleanInputs' rules, worded for the person (or voice) answering again.
+  function settingProblem(f,value) {
+    if(!value)return f.required?'This setting is required.':'';
+    if(f.key==='sshCidr')return ipv4Cidr(value)?'':'Enter an IPv4 range in CIDR form, such as 203.0.113.0/24.';
+    return /^[a-zA-Z0-9_.:-]{1,256}$/.test(value)?'':'Use only letters, digits, dots, underscores, colons and hyphens, with no spaces.';
+  }
   function cleanInputs(provider,value) {
     const result={};
     for(const f of OPTIONS[provider]||[]) { const v=value[f.key]===undefined?f.default:value[f.key]; if(f.required&&!v)throw new Error(f.label+' is required');result[f.key]=String(v||'').trim(); }
     const cidr=String(value.sshCidr||'').trim();
-    const parts=cidr.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})\/(\d{1,2})$/);
-    if(!parts||parts.slice(1,5).some(x=>Number(x)>255)||Number(parts[5])>32)throw new Error('SSH source must be an IPv4 CIDR');
+    if(!ipv4Cidr(cidr))throw new Error('SSH source must be an IPv4 CIDR');
     result.sshCidr=cidr;
     for(const [key,val] of Object.entries(result)) if(key!=='sshCidr'&&!/^[a-zA-Z0-9_.:-]{1,256}$/.test(val))throw new Error('Invalid '+key);
     return result;
@@ -463,7 +546,9 @@
     if(s.phase==='sshKey')return input(s,'sshKey','Select or create the server SSH key',[],{provider:s.provider,algorithm:s.provider==='aws'?'rsa':'ed25519',guide:'guides/'+s.provider+'.md'});
     if(s.phase==='options'){
       const fields=[...OPTIONS[s.provider],field('sshCidr','Allow SSH from IPv4 CIDR','0.0.0.0/0')],current=fields[s.optionIndex||0];
-      return input(s,'instance',current.label,[Object.assign({},current,s.inputs[current.key]?{default:s.inputs[current.key]}:{})],{id:s.deploymentId+'-options-'+(s.optionIndex||0),guide:'guides/'+s.provider+'.md',pricingUrl:PROVIDERS[s.provider][1]});
+      // Asked again after an answer it could not use: why, as the native review's message and the page's problem.
+      const refused=s.optionProblem?{message:s.optionProblem,error:{code:'invalid_setting',message:s.optionProblem}}:{};
+      return input(s,'instance',current.label,[Object.assign({},current,s.inputs[current.key]?{default:s.inputs[current.key]}:{})],Object.assign({id:s.deploymentId+'-options-'+(s.optionIndex||0),guide:'guides/'+s.provider+'.md',pricingUrl:PROVIDERS[s.provider][1]},refused));
     }
     if(s.phase==='manual')return input(s,'instance','Create Ubuntu 24.04 using the console guide',[
       field('host','Public IPv4 address')],{guide:'guides/'+s.provider+'.md',publicKey:s.publicKey});
@@ -476,14 +561,23 @@
       if(!check){s.phase='confirm';return render(s);}
       return output(s,{kind:'http',id:s.deploymentId+'-preflight-'+(s.preflightIndex||0),...check.request});
     }
+    // A recovery question carries its reason as message too, which the native review shows in place of the title.
+    const reason=Object.assign({error:s.error},get(s,'error.message')?{message:s.error.message}:{});
     // An update job only updates or checks its server: the native host refuses any other step in it.
     if(s.phase==='recovery'&&s.operation==='update')return input(s,'recovery','Update needs attention',[field('action','Next step','health',{type:'select',options:[
-      {value:'health',label:'Check server (changes nothing)'},{value:'retry',label:'Retry the update'},{value:'keep',label:'Stop here'}]})],{error:s.error});
+      {value:'health',label:'Check server (changes nothing)'},{value:'retry',label:'Retry the update'},{value:'keep',label:'Stop here'}]})],reason);
+    // Nothing exists in the cloud yet, so there is nothing to reconcile or clean up: change the settings or check again.
+    // A refused token needs new credentials and a busy provider another try; a setting it answered but did not confirm, a change.
+    if(s.phase==='recovery'&&unchecked(s))return input(s,'recovery','Check the server settings',[field('action','Next step',
+      s.mode==='automatic'&&CREDENTIALS[s.provider]&&[401,403].includes(s.checkStatus)?'account':s.checkStatus===429||s.checkStatus>=500?'retry':'edit',{type:'select',options:[
+      {value:'edit',label:'Change server settings'},{value:'retry',label:'Check again'},
+      ...(s.mode==='automatic'&&CREDENTIALS[s.provider]?[{value:'account',label:'Update cloud account credentials'}]:[]),
+      {value:'keep',label:'Stop setup'}]})],reason);
     if(s.phase==='recovery')return input(s,'recovery','Setup needs attention',[field('action','Next step','reconcile',{type:'select',options:[
       {value:'reconcile',label:'Check current cloud state'},{value:'retry',label:'Retry reconciliation'},
       ...(s.creationAbsent?[{value:'recreate',label:'Review a new creation attempt'}]:[]),
       {value:'edit',label:'Change server settings'},...(s.mode==='automatic'&&CREDENTIALS[s.provider]?[{value:'account',label:'Update cloud account credentials'}]:[]),
-      {value:'cleanup',label:'Review removal of created resources'},{value:'keep',label:'Keep resources and stop'}]})],{error:s.error,resources:s.resources});
+      {value:'cleanup',label:'Review removal of created resources'},{value:'keep',label:'Keep resources and stop'}]})],Object.assign(reason,{resources:s.resources}));
     if(s.phase==='recreateConfirm')return input(s,'confirm','Approve a new creation attempt?',[],{summary:{provider:s.provider,name:s.name,
       resource:graph(s)[s.index].key,warning:'No matching resource was found. Check the cloud console for delayed creation before approving; a new resource can add charges.'}});
     if(s.phase==='deleteConfirm')return input(s,'confirm','Delete this deployment?',[],{destructive:true,summary:{deploymentId:s.deploymentId,
@@ -557,9 +651,13 @@
         else if(s.phase==='sshKey'){if(typeof v.credentialRef!=='string'||!/^ssh-(ed25519|rsa) [A-Za-z0-9+/=]+(?: .*)?$/.test(v.publicKey||'')||(s.provider==='aws'&&!v.publicKey.startsWith('ssh-rsa ')))throw new Error('Select a valid SSH key (RSA for Lightsail)');s.sshCredentialRef=v.credentialRef;s.publicKey=v.publicKey.split(/\s+/).slice(0,2).join(' ');s.phase=s.mode==='manual'?'manual':'options';}
         else if(s.phase==='options'){
           const fields=[...OPTIONS[s.provider],field('sshCidr','Allow SSH from IPv4 CIDR','0.0.0.0/0')],f=fields[s.optionIndex||0];
-          const value=v[f.key]===undefined?f.default:v[f.key];if(f.required&&!value)throw new Error(f.label+' is required');
-          s.inputs[f.key]=String(value||'').trim();
-          if((s.optionIndex||0)+1===fields.length){s.inputs=cleanInputs(s.provider,s.inputs);s.preflightIndex=0;s.phase='preflight';}
+          const value=String((v[f.key]===undefined?s.inputs[f.key]||f.default:v[f.key])||'').trim();
+          // A setting the last answer's cleanInputs would refuse is asked again now: "nbg 1" heard by voice used to
+          // stop the setup on "Invalid region", whose recovery asked only the last setting and failed the same way.
+          const problem=settingProblem(f,value);
+          if(problem){s.optionProblem=problem;return render(s);}
+          delete s.optionProblem;s.inputs[f.key]=value;
+          if((s.optionIndex||0)+1===fields.length){s.inputs=cleanInputs(s.provider,s.inputs);s.preflightIndex=0;s.verified=[];s.phase='preflight';}
           else s.optionIndex=(s.optionIndex||0)+1;
         }
         else if(s.phase==='manual'){if(!/^\d{1,3}(\.\d{1,3}){3}$/.test(v.host||''))throw new Error('Enter public IPv4');s.host=v.host;s.phase='manualUser';}
@@ -580,6 +678,14 @@
         else if(s.phase==='recovery'){
           if(v.action==='keep'){s.phase='cancelled';return output(s);}
           if(s.operation==='update'){s.phase=v.action==='retry'?'update':'health';return render(s);}
+          if(unchecked(s)){
+            // Change re-asks every setting with its current value filled in; checking again repeats the failed check.
+            if(v.action==='edit'){s.optionIndex=0;s.phase='options';}
+            else if(v.action==='retry')s.phase='preflight';
+            // Other credentials may reach another account or project: every check runs again with them.
+            else if(v.action==='account'&&s.mode==='automatic'&&CREDENTIALS[s.provider]){s.accountResumePhase='preflight';s.preflightIndex=0;s.verified=[];s.phase='credential';}
+            return render(s);
+          }
           if(v.action==='cleanup'){s.phase='deleteConfirm';return render(s);}
           if(v.action==='recreate'){if(!s.creationAbsent)throw new Error('Reconcile the missing resource first');s.phase='recreateConfirm';return render(s);}
           if(v.action==='edit'){
@@ -601,7 +707,9 @@
       const b=body(event),status=get(event,'result.status',200);
       if(s.phase==='preflight') {
         const check=preflight(s)[s.preflightIndex||0];
-        if(status<200||status>=300||!check.validate(b))return pause(s,check.label+' could not be verified'+(status<200||status>=300?' ('+providerError(status,b)+')':'')+'. Check account permissions, region, plan and Ubuntu 24.04 image.');
+        if(status<200||status>=300){s.checkStatus=status;return pause(s,check.label+' could not be verified ('+providerError(status,b)+'). Check account permissions, region, plan and Ubuntu 24.04 image.');}
+        const problem=check.problem(b&&typeof b==='object'?b:{},event.result);
+        if(problem){delete s.checkStatus;return pause(s,problem);}
         s.verified=(s.verified||[]).concat(check.label);s.preflightIndex=(s.preflightIndex||0)+1;return render(s);
       }
       if(s.phase==='provision') {
@@ -687,7 +795,7 @@
         s.phase='ready';return output(s);
       }
       return render(s);
-    } catch(error) {s.interruptedPhase=s.phase;return pause(s,error.message);}
+    } catch(error) {return pause(s,error.message);} // A refused recovery answer keeps the phase it is recovering.
   }
   root.MobileSSHWorkflow={next,providers:PROVIDERS,graph,credentialFields:CREDENTIALS,optionFields:OPTIONS,image:IMAGE,release:RELEASE};
   if(typeof module!=='undefined'&&module.exports)module.exports=root.MobileSSHWorkflow;

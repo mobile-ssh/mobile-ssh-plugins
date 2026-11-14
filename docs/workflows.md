@@ -64,13 +64,40 @@ VPN Setup's `update` asks for native approval, then runs the pinned installer's
 the clients' ids and public keys, stops the container, copies its data
 directory (wg-easy migrates its database on start), starts the new version and
 verifies its API, `wg0` and the same clients. If the new version does not pass,
-it restores the copy and the previous version. A copy left by an interrupted
-update or rollback is used by the next update. Both its result and `health`'s
+it restores the copy and the previous version, which must list the same
+clients. The copy is never restored after the data may have changed since it
+was taken: a copy left by an interrupted update is reused only while the data
+is still byte-identical to it, or to finish a rollback interrupted after it
+stopped the new version, which has not run since. Any other leftover copy is
+discarded unused, as is any copy once a client is added or revoked, so a
+rollback can never bring back a revoked client. Both its result and `health`'s
 include `version` (the running wg-easy x.y.z, when known) and `current`
 (whether it runs the pinned image); `update` also reports `updated`. Clients,
 keys and imported VPN profiles are kept. A phone connected through the server
 has its tunnel to it stopped before the session opens and reconnects by hand.
 Its recovery offers a read-only check, an explicit retry, or stopping.
+
+VPN Setup checks the chosen offering with read-only requests before asking for
+approval. A check that fails on a successful response pauses with a short
+reason that names the setting, for example `Server type cx23 is sold out in
+fsn1 right now. Locations with it: nbg1, hel1.` (Hetzner's
+`server_types[].locations[].available`, from 2026-04-01) or `Droplet size
+s-1vcpu-1gb isn't offered in nyc3. Regions with it: …` (DigitalOcean's
+`sizes[].available` and `regions`). Provider values enter a reason only when
+they look like identifiers, eight at most, and response text never does; a
+refused request reports its HTTP status with the one fixed code the native host
+puts in place of every refused body (`CLOUD_HTTP_ERROR`), never the provider's
+own code or text. Because nothing has been created yet, that recovery question,
+titled "Check the server settings", offers `edit` (every setting is asked again
+with its current value), `retry` (repeats the failed check), `account` (new
+credentials, then every check again) and `keep` (stops the setup); it never
+offers reconciliation, cleanup or recreation. `edit` is the default, except
+after HTTP 401 or 403 (`account`) and 429 or 5xx (`retry`). Failures after a
+resource exists keep those. Every VPN Setup recovery question also carries its
+reason as `message`, which the native review shows in place of the title,
+beside `error`. A setting that could not be used (empty, a space, or not an
+IPv4 CIDR for the SSH source) is asked again at once with its reason as
+`message` and `error`; it never stops the setup.
 
 The VPN Setup bundle implements ten provider adapters plus an existing-server
 path. Its fixtures validate transitions, recovery, deletion and installer
@@ -91,7 +118,7 @@ provider reads confirmed the VM, Primary IPv4, firewall and SSH key all returned
 were removed. Other cloud adapters and physical-phone acceptance still require
 their own live runs; this IPv4-only server does not provide IPv6 internet egress.
 
-VPN Setup 1.0.2 pins wg-easy 15.5.0
+VPN Setup 1.0.2 and later pin wg-easy 15.5.0
 (`ghcr.io/wg-easy/wg-easy:15.5.0@sha256:071f79a639e9361123a5e57733107320207b844ddbbd92dfa6962f541fe8aac8`).
 The live acceptance above used 15.4.0; 15.5.0 and the `update` operation have
 not had a live cloud run. On 2026-11-12 a local harness called the installer's
@@ -115,3 +142,5 @@ retry succeeded. When it also failed the restored version's verification, the
 copy was kept until deletion removed it. An update stopped after taking its copy
 resumed from that copy, and a stopped current container was started again. Each
 failure returned its fixed error code. A fresh 15.5.0 install also passed.
+VPN Setup 1.0.3's installer, which never restores a copy the data has moved on
+from, passed the same local Docker run.

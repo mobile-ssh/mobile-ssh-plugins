@@ -524,14 +524,17 @@ test('re-entering credentials after uncertain creation still reconciles before m
   assert.equal(current.step.auth.credentialRef,'updated-ref');
 });
 
-test('invalid final settings can be corrected without losing the pending field',()=>{
+test('an invalid final setting is asked again at once, saying why, and its correction goes on to the checks',()=>{
   const prior=state('digitalocean');prior.phase='options';prior.optionIndex=2;
   let current=plain(worker.next(prior,{type:'input',value:{sshCidr:'invalid'}}));
-  assert.equal(current.step.form,'recovery');
-  current=plain(worker.next(current.state,{type:'input',value:{action:'retry'}}));
-  assert.equal(current.step.fields[0].key,'sshCidr');
+  assert.equal(current.step.form,'instance');assert.equal(current.step.fields[0].key,'sshCidr');
+  assert.equal(current.step.id,'test-deployment-123-options-2');
+  assert.equal(current.step.message,'Enter an IPv4 range in CIDR form, such as 203.0.113.0/24.');
+  assert.deepEqual(current.step.error,{code:'invalid_setting',message:current.step.message});
+  // The last usable value stays and is offered again; the refused one is kept nowhere.
+  assert.equal(current.step.fields[0].default,'198.51.100.0/24');assert.equal(current.state.inputs.sshCidr,'198.51.100.0/24');
   current=plain(worker.next(current.state,{type:'input',value:{sshCidr:'198.51.100.0/24'}}));
-  assert.equal(current.state.phase,'preflight');
+  assert.equal(current.state.phase,'preflight');assert.equal(current.state.optionProblem,undefined);
 });
 
 test('partial reconciliation pages cannot prove absence or authorize recreation',()=>{
@@ -584,24 +587,43 @@ test('missing key on a partial account page never submits another key POST',()=>
   assert.equal(current.step.method,'GET');assert.match(current.step.url,/account\/keys\?/);
 });
 
-test('Hetzner preflight rejects unavailable or unadvertised capacity before any mutation',()=>{
-  const locations=[
-    [{id:1,name:'fsn1',available:false},{id:2,name:'nbg1',available:true}],
-    [{id:2,name:'nbg1',available:true}],
-    [{id:1,name:'fsn1',available:'true'}],
-    [{id:1,name:'fsn1'}],
-    [],null
+function preflighting(provider,inputs={},index=0,extra={}){
+  const prior=Object.assign(state(provider),{phase:'preflight',preflightIndex:index},extra);Object.assign(prior.inputs,inputs);
+  return plain(worker.next(prior,{type:'resume'}));
+}
+// A failed check pauses on the settings question, with its reason as the error and the native review's message.
+function refused(current,reason){
+  assert.equal(current.step.kind,'input');assert.equal(current.step.form,'recovery');
+  assert.equal(current.step.title,'Check the server settings');
+  if(reason instanceof RegExp)assert.match(current.state.error.message,reason);else assert.equal(current.state.error.message,reason);
+  assert.equal(current.step.message,current.state.error.message);assert.equal(current.step.error.message,current.state.error.message);
+  assert.deepEqual(current.state.resources,{});
+  return current;
+}
+
+test('Hetzner preflight rejects unavailable or unadvertised capacity before any mutation, saying why',()=>{
+  const none=' No location has it right now.';
+  const cases=[
+    [[{id:1,name:'fsn1',available:false,recommended:false,deprecation:null},{id:2,name:'nbg1',available:true,recommended:false,deprecation:null},
+      {id:3,name:'hel1',available:true,recommended:true,deprecation:null}],'Server type cx23 is sold out in fsn1 right now. Locations with it: hel1, nbg1.'],
+    [[{id:2,name:'nbg1',available:true}],'Server type cx23 isn\'t offered in fsn1. Locations with it: nbg1.'],
+    [[{id:1,name:'fsn1',available:'true'}],'Hetzner did not confirm that server type cx23 can be ordered in fsn1.'+none],
+    [[{id:1,name:'fsn1'}],'Hetzner did not confirm that server type cx23 can be ordered in fsn1.'+none],
+    [[{id:1,name:'fsn1',available:false,deprecation:{announced:'2026-01-01T00:00:00Z',unavailable_after:'2026-06-01T00:00:00Z'}},{id:2,name:'nbg1',available:false}],
+      'Server type cx23 is being retired in fsn1 and can\'t be ordered there.'+none],
+    [[],'Server type cx23 isn\'t offered in fsn1.'+none],
+    [null,'Hetzner did not list where server type cx23 can be ordered.']
   ];
-  for(const value of locations){
-    const prior=state('hetzner');prior.phase='preflight';prior.preflightIndex=0;
-    let current=plain(worker.next(prior,{type:'resume'}));
+  for(const [value,reason] of cases){
+    let current=preflighting('hetzner');
     assert.equal(current.step.method,'GET');assert.match(current.step.url,/server_types\?name=cx23$/);
-    current=result(current,{server_types:[{name:'cx23',architecture:'x86',locations:value}]});
-    assert.equal(current.step.kind,'input');assert.equal(current.step.form,'recovery');
-    assert.match(current.state.error.message,/selected location/);
-    assert.deepEqual(current.state.resources,{});
+    current=refused(result(current,{server_types:[{name:'cx23',architecture:'x86',locations:value}]}),reason);
     assert.ok(!current.state.verified||!current.state.verified.length);
   }
+  refused(result(preflighting('hetzner'),{server_types:[]}),'Hetzner Cloud has no server type cx23.');
+  refused(result(preflighting('hetzner'),{server_types:[{name:'cx33',architecture:'x86'}]}),'Hetzner Cloud has no server type cx23.');
+  refused(result(preflighting('hetzner'),{server_types:[{name:'cx23',architecture:'arm',locations:[]}]}),
+    'Server type cx23 is not an x86 type (it is arm). Choose an x86 server type.');
 });
 
 test('Hetzner advertised capacity still requires location validation and native approval',()=>{
@@ -618,6 +640,234 @@ test('Hetzner legacy type responses without locations retain architecture and se
   const initial=plain(worker.next(prior,{type:'resume'}));
   const compatible=result(initial,{server_types:[{name:'cx23',architecture:'x86'}]});
   assert.equal(compatible.step.method,'GET');assert.match(compatible.step.url,/locations\?/);
+  refused(result(compatible,{locations:[]}),'Hetzner Cloud has no location fsn1.');
   const wrongArchitecture=result(initial,{server_types:[{name:'cx23',architecture:'arm'}]});
   assert.equal(wrongArchitecture.step.form,'recovery');assert.deepEqual(wrongArchitecture.state.resources,{});
+});
+
+test('DigitalOcean preflight names the missing size, its availability or the regions that have it',()=>{
+  const size=(extra)=>({sizes:[{slug:'s-2vcpu-2gb',available:true,regions:['nyc3']},{slug:'s-1vcpu-1gb',available:true,regions:['nyc3'],...extra}]});
+  for(const [body,reason] of [
+    [{sizes:[]},'DigitalOcean listed no Droplet sizes. The token may lack read access to sizes and regions.'],
+    [{},'DigitalOcean listed no Droplet sizes. The token may lack read access to sizes and regions.'],
+    [{sizes:[{slug:'s-2vcpu-2gb',available:true,regions:['nyc3']}],meta:{total:1}},'DigitalOcean has no Droplet size s-1vcpu-1gb.'],
+    [{sizes:[{slug:'s-2vcpu-2gb',available:true,regions:['nyc3']}],links:{pages:{next:'https://api.digitalocean.com/v2/sizes?page=2&per_page=200'}}},
+      'DigitalOcean listed only part of its Droplet sizes, without s-1vcpu-1gb. Check again later.'],
+    [size({available:false}),'Droplet size s-1vcpu-1gb isn\'t available to this account for new Droplets.'],
+    [size({regions:['ams3','fra1']}),'Droplet size s-1vcpu-1gb isn\'t offered in nyc3. Regions with it: ams3, fra1.'],
+    [size({regions:[]}),'Droplet size s-1vcpu-1gb isn\'t offered in nyc3. No region has it right now.'],
+    [size({regions:undefined}),'Droplet size s-1vcpu-1gb isn\'t offered in nyc3. No region has it right now.']
+  ])refused(result(preflighting('digitalocean'),body),reason);
+  const sized=result(preflighting('digitalocean'),size({}));
+  assert.match(sized.step.url,/images\/ubuntu-24-04-x64$/);
+  refused(result(sized,{image:{}}),'DigitalOcean did not return its Ubuntu 24.04 image. The token may lack read access to images.');
+  assert.equal(result(sized,{image:{id:42}}).step.form,'confirm');
+  // A refused request keeps its HTTP status. The native host replaces every refused body with one fixed code
+  // (PluginCloudHttp.sanitized), so the provider's own code never reaches the worker.
+  const denied=result(preflighting('digitalocean'),{code:'CLOUD_HTTP_ERROR'},403);
+  assert.equal(denied.state.error.message,'Droplet region and size could not be verified (HTTP 403, CLOUD_HTTP_ERROR). Check account permissions, region, plan and Ubuntu 24.04 image.');
+});
+
+test('a refused check suggests new credentials for a refused token and another try for a busy provider',()=>{
+  for(const [status,first] of [[401,'account'],[403,'account'],[429,'retry'],[500,'retry'],[503,'retry'],[404,'edit']]){
+    const current=refused(result(preflighting('digitalocean'),{code:'CLOUD_HTTP_ERROR'},status),new RegExp('\\(HTTP '+status+', CLOUD_HTTP_ERROR\\)'));
+    assert.equal(current.step.fields[0].default,first,String(status));
+  }
+  // A check that was answered but did not confirm the setting suggests changing it, even after a refused one.
+  let current=refused(result(preflighting('digitalocean'),{code:'CLOUD_HTTP_ERROR'},503),/HTTP 503/);
+  current=plain(worker.next(current.state,{type:'input',value:{action:'retry'}}));
+  current=refused(result(current,{sizes:[{slug:'s-1vcpu-1gb',available:true,regions:['ams3']}]}),/isn't offered in nyc3/);
+  assert.equal(current.step.fields[0].default,'edit');
+});
+
+test('a preflight reason only repeats identifier-like provider values, at most eight of them',()=>{
+  const hostile=['<img src=x onerror=alert(1)>','a'.repeat(41),'sfo3',{name:'x'},'token with space','',null,7,'sfo3'];
+  let current=refused(result(preflighting('digitalocean'),{sizes:[{slug:'s-1vcpu-1gb',available:true,regions:hostile,description:'free text must stay out'}]}),
+    'Droplet size s-1vcpu-1gb isn\'t offered in nyc3. Regions with it: sfo3, 7.');
+  assert.ok(!/[<>]|free text/.test(JSON.stringify(current.state)));
+  const many=Array.from({length:12},(_,i)=>'r'+i);
+  refused(result(preflighting('digitalocean'),{sizes:[{slug:'s-1vcpu-1gb',available:true,regions:many}]}),
+    'Droplet size s-1vcpu-1gb isn\'t offered in nyc3. Regions with it: r0, r1, r2, r3, r4, r5, r6, r7 and 4 more.');
+  current=refused(result(preflighting('hetzner'),{server_types:[{name:'cx23',architecture:'<b>arm</b>',locations:[]}]}),
+    'Server type cx23 is not an x86 type. Choose an x86 server type.');
+  // A long setting of the user's own is shortened, not dropped.
+  refused(result(preflighting('hetzner',{size:'x'.repeat(60)}),{server_types:[]}),'Hetzner Cloud has no server type '+'x'.repeat(37)+'....');
+  // Bodies that are not objects are an empty answer, never an exception text.
+  refused(result(preflighting('hetzner'),'null'),'Hetzner Cloud has no server type cx23.');
+});
+
+const VALID={
+  gcp:[{name:'e2-small'},{status:'READY'}],
+  aws:[{bundles:[{bundleId:'micro_3_0',isActive:true}]},{blueprints:[{blueprintId:'ubuntu_24_04',isActive:true}]},
+    {regions:[{name:'us-east-1',availabilityZones:[{zoneName:'us-east-1a'}]}]}],
+  azure:[{state:'Enabled'},{value:[{name:'Standard_B1s'}]}],
+  digitalocean:[{sizes:[{slug:'s-1vcpu-1gb',available:true,regions:['nyc3']}]},{image:{id:42}}],
+  hetzner:[{server_types:[{name:'cx23',architecture:'x86',locations:[{id:1,name:'fsn1',available:true,recommended:true,deprecation:null}]}]},{locations:[{id:1,name:'fsn1'}]}],
+  linode:[{id:'g6-nanode-1'},{id:'linode/ubuntu24.04'},{status:'ok'}],
+  vultr:[{os:[{id:1743,name:'Ubuntu 24.04 LTS x64',arch:'x64'}]},{plans:[{id:'vc2-1c-1gb',locations:['ewr']}]}],
+  oci:[{operatingSystem:'Canonical Ubuntu',operatingSystemVersion:'24.04'},[{shape:'VM.Standard.E4.Flex'}]],
+  ovh:[[{id:'example',name:'Ubuntu 24.04'}],[{id:'example',name:'b3-8',available:true}]],
+  scaleway:[{image:{arch:'x86_64',name:'Ubuntu 24.04 Noble Numbat'}},{servers:{'DEV1-S':{ncpus:2}}}]
+};
+test('every provider passes its read-only checks on valid answers and reaches native approval',()=>{
+  for(const [provider,bodies] of Object.entries(VALID)){
+    let current=preflighting(provider);
+    for(const body of bodies){assert.equal(current.state.phase,'preflight',provider);current=result(current,body);}
+    assert.equal(current.step.form,'confirm',provider);
+    assert.equal(current.state.verified.length,bodies.length,provider);
+  }
+});
+
+test('every provider names the setting its read-only check could not find',()=>{
+  for(const [provider,index,body,reason] of [
+    ['gcp',0,{name:'other'},'Google Cloud did not confirm machine type e2-small in zone us-central1-a.'],
+    ['gcp',1,{status:'PENDING'},'Google Cloud\'s Ubuntu 24.04 image is not ready (status PENDING).'],
+    ['aws',0,{bundles:[]},'Lightsail has no bundle micro_3_0 in us-east-1.'],
+    ['aws',0,{bundles:[{bundleId:'micro_3_0',isActive:false}]},'Lightsail bundle micro_3_0 is no longer offered.'],
+    ['aws',1,{blueprints:[{blueprintId:'ubuntu_22_04',isActive:true}]},'Lightsail does not offer the Ubuntu 24.04 blueprint in us-east-1.'],
+    ['aws',2,{regions:[]},'Lightsail has no region us-east-1.'],
+    ['aws',2,{regions:[{name:'us-east-1',availabilityZones:[{zoneName:'us-east-1b'},null,{zoneName:'us-east-1c'}]}]},
+      'Availability zone us-east-1a is not in Lightsail region us-east-1. Zones there: us-east-1b, us-east-1c.'],
+    ['azure',0,{state:'Disabled'},'The Azure subscription is Disabled, not Enabled.'],
+    ['azure',0,{},'Azure did not confirm that the subscription is enabled.'],
+    ['azure',1,{value:[{name:'Standard_B2s'}]},'VM size Standard_B1s isn\'t offered in eastus.'],
+    ['azure',1,{value:[]},'Azure listed no VM sizes in eastus. Check the region name.'],
+    ['linode',0,{id:'g6-standard-1'},'Linode has no plan g6-nanode-1.'],
+    ['linode',1,{},'Linode did not return its Ubuntu 24.04 image.'],
+    ['linode',2,{status:'outage'},'Linode region us-east is not available right now (status outage).'],
+    ['vultr',0,{os:[{id:2284,name:'Ubuntu 24.04 LTS x64',arch:'x64'},{id:2136,name:'Debian 12 x64',arch:'x64'}]},'Vultr has no OS ID 1743. Ubuntu 24.04 x64 is OS ID 2284.'],
+    ['vultr',0,{os:[{id:1743,name:'Debian 12 x64',arch:'x64'}]},'Vultr OS ID 1743 is not Ubuntu 24.04 x64.'],
+    ['vultr',1,{plans:[]},'Vultr has no plan vc2-1c-1gb.'],
+    ['vultr',1,{plans:[{id:'vc2-1c-1gb',locations:['ams','fra']}]},'Vultr plan vc2-1c-1gb isn\'t offered in ewr. Regions with it: ams, fra.'],
+    ['oci',0,{operatingSystem:'Oracle Linux',operatingSystemVersion:'9'},'The selected Oracle Cloud image is not Ubuntu 24.04.'],
+    ['oci',1,[{shape:'VM.Standard.E2.1.Micro'}],'Shape VM.Standard.E4.Flex isn\'t offered with this image in availability domain example. Shapes there: VM.Standard.E2.1.Micro.'],
+    ['oci',1,{},'Shape VM.Standard.E4.Flex isn\'t offered with this image in availability domain example.'],
+    ['ovh',0,[],'OVHcloud has no image with the selected ID in GRA11.'],
+    ['ovh',0,[{id:'example',name:'Debian 12'}],'The selected OVHcloud image is not Ubuntu 24.04.'],
+    ['ovh',1,[],'OVHcloud has no flavor with the selected ID in GRA11.'],
+    ['ovh',1,[{id:'example',name:'d2-2',available:false}],'OVHcloud flavor d2-2 is sold out in GRA11 right now.'],
+    ['ovh',1,[{id:'example',name:'d2 2 (sold)',available:false}],'The selected OVHcloud flavor is sold out in GRA11 right now.'],
+    ['scaleway',0,{image:{arch:'arm64',name:'Ubuntu 24.04'}},'The selected Scaleway image is not for x86_64 (it is arm64).'],
+    ['scaleway',0,{image:{arch:'x86_64',name:'Debian Bookworm'}},'The selected Scaleway image is not Ubuntu 24.04.'],
+    ['scaleway',1,{servers:{'GP1-XS':{}}},'Scaleway has no instance type DEV1-S in fr-par-1.']
+  ]){
+    let current=preflighting(provider);
+    for(const body of VALID[provider].slice(0,index))current=result(current,body);
+    assert.equal(current.state.preflightIndex,index,provider);
+    refused(result(current,body),reason);
+  }
+});
+
+function soldOut(inputs){
+  return refused(result(preflighting('hetzner',inputs),{server_types:[{name:'cx23',architecture:'x86',
+    locations:[{id:1,name:'fsn1',available:false,recommended:false,deprecation:null},{id:2,name:'nbg1',available:true,recommended:true,deprecation:null}]}]}),
+    /^Server type cx23 is sold out in fsn1 right now\. Locations with it: nbg1\.$/);
+}
+
+test('a preflight failure offers changing the settings first and nothing that acts on cloud resources',()=>{
+  const current=soldOut();
+  // One select field: the voice offers it as a choice.
+  assert.deepEqual(current.step.fields.map(f=>[f.key,f.type,f.default]),[['action','select','edit']]);
+  assert.deepEqual(current.step.fields[0].options.map(o=>[o.value,o.label]),[['edit','Change server settings'],['retry','Check again'],
+    ['account','Update cloud account credentials'],['keep','Stop setup']]);
+  assert.equal(current.state.interruptedPhase,'preflight');
+  assert.equal(current.step.resources,undefined);
+  // An answer it did not offer leaves the question as it was.
+  for(const action of ['reconcile','cleanup','recreate','health']){
+    const same=plain(worker.next(current.state,{type:'input',value:{action}}));
+    assert.deepEqual(same.step,current.step,action);assert.equal(same.state.phase,'recovery');
+  }
+});
+
+test('changing the settings re-asks each one with its current value and checks them all again',()=>{
+  let current=preflighting('digitalocean',{region:'sfo3'});
+  current=result(current,{sizes:[{slug:'s-1vcpu-1gb',available:true,regions:['sfo3']}]});
+  assert.deepEqual(current.state.verified,['Droplet region and size']);
+  current=refused(result(current,{image:{}}),/Ubuntu 24\.04 image/);
+  current=plain(worker.next(current.state,{type:'input',value:{action:'edit'}}));
+  assert.equal(current.state.phase,'options');
+  const asked=[];
+  for(;current.state.phase==='options';){
+    assert.equal(current.step.fields.length,1);
+    const f=current.step.fields[0];asked.push([f.key,f.default]);
+    current=plain(worker.next(current.state,{type:'input',value:f.key==='region'?{region:'ams3'}:{}}));
+  }
+  assert.deepEqual(asked,[['region','sfo3'],['size','s-1vcpu-1gb'],['sshCidr','198.51.100.0/24']]);
+  assert.equal(current.state.inputs.region,'ams3');assert.equal(current.state.inputs.sshCidr,'198.51.100.0/24');
+  assert.equal(current.state.preflightIndex,0);assert.deepEqual(current.state.verified,[]);
+  assert.match(current.step.url,/\/v2\/sizes\?/);
+  current=result(current,{sizes:[{slug:'s-1vcpu-1gb',available:true,regions:['ams3']}]});
+  current=result(current,{image:{id:42}});
+  assert.equal(current.step.form,'confirm');
+  assert.deepEqual(current.state.verified,['Droplet region and size','Ubuntu image']);
+  assert.equal(current.step.summary.settings.region,'ams3');
+});
+
+test('checking again repeats only the failed check and new credentials resume it',()=>{
+  let current=preflighting('hetzner');
+  current=result(current,{server_types:[{name:'cx23',architecture:'x86',locations:[{id:1,name:'fsn1',available:true}]}]});
+  current=refused(result(current,{locations:[]}),'Hetzner Cloud has no location fsn1.');
+  const failed=current.state;
+  current=plain(worker.next(failed,{type:'input',value:{action:'retry'}}));
+  assert.equal(current.step.id,failed.deploymentId+'-preflight-1');assert.match(current.step.url,/locations\?name=fsn1$/);
+  current=result(current,{locations:[{id:1,name:'fsn1'}]});
+  assert.equal(current.step.form,'confirm');
+  assert.deepEqual(current.state.verified,['Server type in selected location','Location']);
+  // Other credentials may reach another account or project: every check runs again, none counts as verified.
+  current=plain(worker.next(failed,{type:'input',value:{action:'account'}}));
+  assert.equal(current.step.form,'credential');
+  current=plain(worker.next(current.state,{type:'input',value:{credentialRef:'updated-ref'}}));
+  assert.equal(current.step.id,failed.deploymentId+'-preflight-0');assert.equal(current.step.auth.credentialRef,'updated-ref');
+  assert.deepEqual(current.state.verified,[]);
+});
+
+test('stopping after a preflight failure ends the setup as stopped, with nothing to clean up',()=>{
+  const current=plain(worker.next(soldOut().state,{type:'input',value:{action:'keep'}}));
+  assert.equal(current.step.kind,'complete');assert.equal(current.state.phase,'cancelled');
+  assert.equal(current.step.result.status,'cancelled');assert.deepEqual(current.state.resources,{});
+});
+
+test('failures after resources exist, or outside the checks, keep the cloud recovery',()=>{
+  const cloud=['reconcile','retry','edit','account','cleanup','keep'];
+  const initial=state('digitalocean');initial.resources.key={id:11,owned:true,status:'created'};initial.index=1;
+  const created=result(plain(worker.next(initial,{type:'resume'})),{id:'forbidden',message:'denied'},403);
+  assert.equal(created.step.title,'Setup needs attention');assert.equal(created.step.fields[0].default,'reconcile');
+  assert.deepEqual(created.step.fields[0].options.map(o=>o.value),cloud);
+  assert.equal(created.step.message,created.state.error.message);assert.ok(created.step.resources.key);
+  // A preflight snapshot that somehow holds an owned resource is not treated as untouched.
+  const held=result(preflighting('hetzner',{},0,{resources:{server:{id:33,owned:true,status:'created'}}}),{server_types:[]});
+  assert.equal(held.step.title,'Setup needs attention');assert.deepEqual(held.step.fields[0].options.map(o=>o.value),cloud);
+});
+
+test('a setting heard wrong is asked again and never brings back the cloud recovery',()=>{
+  // The recorded run: cx23 sold out in fsn1, "Change server settings", and the location heard as "nbg 1".
+  let current=soldOut();
+  current=plain(worker.next(current.state,{type:'input',value:{action:'edit'}}));
+  assert.equal(current.step.title,'Location');
+  for(const [answer,reason] of [[{region:'nbg 1'},'Use only letters, digits, dots, underscores, colons and hyphens, with no spaces.'],
+    [{region:'   '},'This setting is required.'],[{region:'nbg1;rm'},'Use only letters, digits, dots, underscores, colons and hyphens, with no spaces.']]){
+    current=plain(worker.next(current.state,{type:'input',value:answer}));
+    assert.equal(current.state.phase,'options');assert.equal(current.step.form,'instance');assert.equal(current.step.title,'Location');
+    assert.equal(current.step.message,reason);assert.equal(current.step.error.message,reason);
+    assert.equal(current.step.fields[0].default,'fsn1');assert.equal(current.state.inputs.region,'fsn1');
+    assert.equal(current.state.interruptedPhase,'preflight');
+  }
+  current=plain(worker.next(current.state,{type:'input',value:{region:'nbg1'}}));
+  assert.equal(current.step.title,'Server type');assert.equal(current.step.message,undefined);assert.equal(current.step.error,undefined);
+  current=plain(worker.next(current.state,{type:'input',value:{}}));
+  current=plain(worker.next(current.state,{type:'input',value:{sshCidr:'203.0.113.0/33'}}));
+  assert.equal(current.step.fields[0].key,'sshCidr');assert.match(current.step.message,/IPv4 range/);
+  current=plain(worker.next(current.state,{type:'input',value:{}}));
+  assert.equal(current.state.phase,'preflight');assert.equal(current.state.inputs.region,'nbg1');
+  assert.match(current.step.url,/server_types\?name=cx23$/);
+});
+
+test('a refused recovery answer keeps the phase being recovered',()=>{
+  let current=result(plain(worker.next(state('digitalocean'),{type:'resume'})),{},503);
+  assert.equal(current.state.interruptedPhase,'provision');
+  current=plain(worker.next(current.state,{type:'input',value:{action:'recreate'}}));
+  assert.equal(current.step.form,'recovery');assert.equal(current.state.error.message,'Reconcile the missing resource first');
+  assert.equal(current.state.interruptedPhase,'provision');
+  current=plain(worker.next(current.state,{type:'input',value:{action:'retry'}}));
+  assert.equal(current.step.method,'GET');assert.equal(current.state.httpStage,'reconcile');
 });

@@ -46,7 +46,7 @@
       "id": "io.github.mobilessh.vpnsetup",
       "name": "VPN Setup",
       "description": "Create a cloud WireGuard VPN, register it in Mobile SSH, and manage its clients and cloud resources with a guided, resumable workflow.",
-      "version": "1.0.2",
+      "version": "1.0.3",
       "minBridgeVersion": "1.3.0",
       "role": "connectivity",
       "icon": "plugins/vpnsetup/icon.svg",
@@ -63,7 +63,7 @@
       "files": [
         {
           "path": "README.md",
-          "sha256": "27d7b39076d905007a56712f6588430efec3d5506cf3389d921f7f9c28a6378f"
+          "sha256": "b081f8265950fa2fccd69e1f5d2579d56ab9913a274296444355b3a22e74389f"
         },
         {
           "path": "guides/aws.md",
@@ -115,31 +115,31 @@
         },
         {
           "path": "manifest.json",
-          "sha256": "d1a6983365aee0b856f1cc10d6baa6fda2e1034fc62c8416a5e2d41368a93c3b"
+          "sha256": "b6c25d7bda2f7b94fd72345da50b0cd3e03df8ae28f0a844e1acf8782df34d8e"
         },
         {
           "path": "server/vpn.py",
-          "sha256": "bd1c07d836c798965c0bbc63230458c64262bd9961dd2db02131b9aa3a00f01d"
+          "sha256": "95031d57828c426bd13db835af6f1dc852852389a796bcd59e21dde795e61216"
         },
         {
           "path": "tests/test_installer.py",
-          "sha256": "b6daabd2df5eba8f58b988bca10cf161fde917a330841c1e8b6418f201968b5a"
+          "sha256": "23af4896cb6a8181d0119c5132e97c8b7b6e9a23e704c5d01f003433b3baa442"
         },
         {
           "path": "tests/ui.test.cjs",
-          "sha256": "eb6fb46d4e4b59782fc55b513628ab31a313ebcf8fb7a653687ffb28a7b97ee0"
+          "sha256": "b24a6ceadce2a7ed622b9b0b0097e67c008871a31896af04317ec608b19a81c6"
         },
         {
           "path": "tests/worker.test.cjs",
-          "sha256": "71534f16578115b7a80e743b955e8ac46fd68ff13b17d26e41dcea5fb9fce1c0"
+          "sha256": "72b755d7d879a89e0fdd99841ac69bba5d78b6865718e72a5d3245ddffe191ba"
         },
         {
           "path": "ui/app.js",
-          "sha256": "71590e797d8aff13f23a1f8c9cb45aedc2ab82f24f28af8dc67cc513e3bc665c"
+          "sha256": "89ce5349c6e0195292a4fb35ce6a747301c410c4a2b0217d9f5c954e5507f39e"
         },
         {
           "path": "ui/index.html",
-          "sha256": "b253b7b2b4a9f635f2339326b0bb98e931d4abab89c61e974574a56e0bbfa0e4"
+          "sha256": "881c139a6b7d5a741aca6cebc507d4d457564746382d9e83493fad533238cdb1"
         },
         {
           "path": "ui/styles.css",
@@ -147,7 +147,7 @@
         },
         {
           "path": "worker.js",
-          "sha256": "76a9a94a0315006af68cd06d2954fbd2a9cc387ab66fa2faeb5d949f1bdf2471"
+          "sha256": "e90b81c1f7c4fff8512aefc0e2fdfb6d0faf363ca4808b56a855a9de97fb73d7"
         }
       ]
     },
