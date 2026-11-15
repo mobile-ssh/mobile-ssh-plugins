@@ -3405,3 +3405,275 @@ test('the review shows the names of listed answers whose values are IDs, and of 
   const confirming=Object.assign(plain(ovh.state),{phase:'confirm'});
   assert.equal(plain(worker.next(confirming,{type:'input',value:{confirmed:true}})).state.names,undefined);
 });
+
+// VPN Setup 1.0.7: every confirm step also carries `review`, the readable form the native review lays out; `summary` stays.
+// The bridge's limits, checked independently of the worker's own caps.
+const CONTROL=/\p{C}/u;
+// Lengths in UTF-16 units, as the app's Java strings count them.
+const fits=(v,max)=>typeof v==='string'&&v.length>0&&v.length<=max&&!CONTROL.test(v)&&v===v.trim();
+function validReview(r){
+  assert.ok(r&&typeof r==='object'&&!Array.isArray(r),'review');
+  assert.deepEqual(Object.keys(r).filter(k=>!['heading','sections','notes','links'].includes(k)),[]);
+  if('heading' in r)assert.ok(fits(r.heading,120),'heading');
+  assert.ok(Array.isArray(r.sections)&&r.sections.length>=1&&r.sections.length<=8,'sections');
+  for(const s of r.sections){
+    assert.deepEqual(Object.keys(s),['title','rows']);assert.ok(fits(s.title,60),'title '+s.title);
+    assert.ok(Array.isArray(s.rows)&&s.rows.length>=1&&s.rows.length<=12,'rows of '+s.title);
+    for(const x of s.rows){
+      assert.deepEqual(Object.keys(x).filter(k=>!['label','value','note','tone'].includes(k)),[]);
+      assert.ok(fits(x.label,40),'label '+x.label);assert.ok(fits(x.value,300),'value '+x.value);
+      if('note' in x)assert.ok(fits(x.note,160),'note');if('tone' in x)assert.ok(['normal','warning','muted'].includes(x.tone),'tone');
+    }
+  }
+  if('notes' in r){assert.ok(r.notes.length>=1&&r.notes.length<=4,'notes');for(const n of r.notes){assert.ok(fits(n.text,300));assert.ok(['info','warning','danger'].includes(n.tone));}}
+  if('links' in r){assert.ok(r.links.length>=1&&r.links.length<=2,'links');for(const l of r.links){assert.ok(fits(l.label,60));assert.match(l.url,/^https:\/\/[^\s]{1,292}$/);}}
+  return r;
+}
+const rowsOf=r=>r.sections.flatMap(s=>s.rows);
+const sectionOf=(r,title)=>(r.sections.find(s=>s.title===title)||{rows:[]}).rows.map(x=>[x.label,x.value].concat(x.note||x.tone?[x.note||'']:[]).concat(x.tone?[x.tone]:[]));
+// A deployment made with the test fixtures (placeholder addresses), ready with one client.
+function provisioned(provider){
+  let current=plain(worker.next(state(provider),{type:'resume'}));
+  for(let i=0;i<80&&current.step.kind!=='ssh';i++)current=result(current,JSON.parse(JSON.stringify(fixture(provider,worker.graph(current.state)[current.state.index].key,current.state)).replace(/8\.8\.4\.4/g,'203.0.113.10')));
+  current=result(result(current,{clientId:'1',configRef:'vault-config-ref'}),{profileId:'profile-1'});
+  assert.equal(current.state.phase,'ready');return current.state;
+}
+const confirmed=(provider,inputs)=>{let current=preflighting(provider,inputs);for(const body of VALID[provider])current=result(current,body);return current;};
+// A setup's review shows each setting's exact value, or its name with the exact ID beside it.
+function showsSettings(current){
+  const s=current.state,rows=rowsOf(current.step.review);
+  for(const f of worker.optionFields[s.provider]){
+    const v=s.inputs[f.key],label={projectId:'Project',subscriptionId:'Subscription',compartmentId:'Compartment',imageId:'Image'}[f.key]||f.label.replace(/ (ID|UUID|OCID)$/,'');
+    const x=rows.find(y=>y.label===label);assert.ok(x,s.provider+' '+f.key);
+    if(f.options)assert.equal(x.value,f.options.find(o=>o.value===v).label);
+    else assert.ok(x.value===v||x.value.startsWith(v+' · ')||(x.note||'').split(' · ').includes('ID '+v)||rows.some(y=>y.label===label+' ID'&&y.value===v),s.provider+' '+f.key+': '+x.value);
+  }
+  assert.ok(rows.some(x=>x.label==='SSH access'&&x.value.includes(s.inputs.sshCidr)));
+}
+
+test('every provider\'s confirm steps carry a review within the bridge\'s limits, beside the summary older apps read',()=>{
+  for(const provider of Object.keys(VALID)){
+    const create=confirmed(provider);
+    assert.equal(create.step.form,'confirm');validReview(create.step.review);showsSettings(create);
+    // The summary is as before: the same keys, the settings exactly as sent.
+    assert.deepEqual(Object.keys(create.step.summary),['provider','name','settings','verified','pricingUrl','billing']);
+    assert.deepEqual(create.step.summary.settings,create.state.inputs);assert.equal(create.step.review.heading,'New VPN server on '+worker.providers[provider][0]);
+    assert.deepEqual(create.step.review.links,[{label:worker.providers[provider][0]+' prices',url:worker.providers[provider][1]}]);
+    assert.deepEqual(sectionOf(create.step.review,'Checked with '+worker.providers[provider][0]).map(x=>x[1]),create.state.verified.map(()=>'Confirmed'));
+    const ready=provisioned(provider);ready.clients.push({clientId:'2',profileId:'profile-2'});
+    const again=plain(worker.next(Object.assign(plain(ready),{phase:'recreateConfirm',index:worker.graph(ready).findIndex(op=>op.key==='server')}),{type:'resume'}));
+    const steps={recreate:again.step,delete:lifecycle('delete',ready).step,createClient:lifecycle('createClient',ready).step,
+      revokeClient:lifecycle('revokeClient',ready,{clientId:'2'}).step,update:lifecycle('update',ready).step};
+    for(const [phase,step] of Object.entries(steps)){assert.equal(step.form,'confirm',provider+' '+phase);validReview(step.review);}
+    assert.equal(steps.delete.destructive,true);assert.equal(steps.revokeClient.destructive,true);
+    assert.deepEqual(Object.keys(steps.delete.summary),['deploymentId','provider','host','resources','warning']);
+    assert.equal(steps.delete.review.heading,'Delete the VPN on '+worker.providers[provider][0]);
+    // Every owned resource but a Scaleway power-on and a Lightsail attachment (steps, not resources) is listed to be deleted.
+    const owned=Object.values(ready.resources).filter(x=>x.owned&&!['power','attachment'].includes(x.type));
+    assert.equal(sectionOf(steps.delete.review,'Will be deleted').length,owned.length+1,provider);
+    assert.match(steps.delete.review.notes[0].text,/cannot be undone/);assert.equal(steps.delete.review.notes[0].tone,'danger');
+    assert.ok(rowsOf(steps.delete.review).some(x=>x.value.includes('203.0.113.10')),provider);
+    assert.equal(steps.revokeClient.review.heading,'Revoke VPN client 2');assert.equal(steps.update.review.heading,'Update WireGuard to 15.5.0');
+  }
+});
+
+test('the create review says what the lists said of each chosen value, the price and specs included, and nothing they did not',()=>{
+  let current=readCatalog(toCatalog());
+  const labels={};
+  for(let i=0;i<3;i++){const f=current.step.fields[0];if(f.options)labels[f.key]=f.options[0].label;current=answer(current,{});}
+  current=result(current,{server_types:[{name:'cx23',architecture:'x86',locations:[{name:'nbg1',available:true}]}]});current=result(current,{locations:[{name:'nbg1'}]});
+  assert.equal(current.step.form,'confirm');
+  assert.deepEqual(labels,{region:'nbg1 (suggested) · Nuremberg, DE',size:'cx23 (suggested) · 3.80 EUR/mo · 2 vCPU, 4 GB RAM'});
+  assert.deepEqual(validReview(current.step.review),{heading:'New VPN server on Hetzner Cloud',sections:[
+    {title:'Server',rows:[{label:'Cloud',value:'Hetzner Cloud'},{label:'Location',value:'nbg1 · Nuremberg, DE'},
+      {label:'Server type',value:'cx23 · 3.80\u00a0EUR/mo · 2\u00a0vCPU, 4\u00a0GB\u00a0RAM',note:'Plus 0.60\u00a0EUR/mo for its public IPv4 address'},
+      {label:'System',value:'Ubuntu 24.04 LTS'},{label:'Server name',value:'mssh-catalogtest',note:'The resources made with it get this name too.'}]},
+    {title:'Access',rows:[{label:'SSH access',value:'Any address (0.0.0.0/0)',note:'Logins need this setup\'s SSH key.'},{label:'VPN port',value:'UDP 51820, open to any address'},
+      {label:'VPN software',value:'WireGuard (wg-easy 15.5.0)'},{label:'Profile on this phone',value:'VPN mssh-catalogtest'}]},
+    {title:'Checked with Hetzner Cloud',rows:[{label:'Server type in selected location',value:'Confirmed'},{label:'Location',value:'Confirmed'}]}],
+    notes:[{text:'Hetzner Cloud bills for the server and what is made for it until they are deleted. Public IPv4 and bandwidth may be charged separately.',tone:'warning'}],
+    links:[{label:'Hetzner Cloud prices',url:'https://www.hetzner.com/cloud/'}]});
+  // The profile is the one vpn.import saves; the summary is 1.0.6's, with no names for Hetzner.
+  assert.equal(current.step.summary.names,undefined);assert.deepEqual(current.step.summary.settings,{region:'nbg1',size:'cx23',sshCidr:'0.0.0.0/0'});
+  const imported=plain(worker.next(Object.assign(plain(current.state),{phase:'import',clientSequence:0,lastClientId:'1',configRef:'c'}),{type:'resume'}));
+  assert.equal(imported.step.name,'VPN mssh-catalogtest');
+  // Every other provider, through its lists: each row repeats the chosen entry's label less its marks (and two of a name, the
+  // ID start shown beside it instead); an Oracle Cloud shape adds the size the create asks for.
+  const CHECKS={vultr:[VULTR.os,VULTR.plans],linode:[{id:'g6-nanode-1'},{id:'linode/ubuntu24.04'},{status:'ok'}],digitalocean:[DIGITALOCEAN.sizes,DIGITALOCEAN.image],
+    aws:[LIGHTSAIL.bundles,{blueprints:[{blueprintId:'ubuntu_24_04',isActive:true}]},LIGHTSAIL.regions],ovh:[OVH.images,OVH.flavors],
+    scaleway:[{image:{id:NOBLE,arch:'x86_64',name:'Ubuntu 24.04 Noble Numbat'}},step=>scwPage(SCW.servers,step)],
+    gcp:[{name:'e2-micro',architecture:'X86_64'},{status:'READY'}],azure:[{state:'Enabled'},AZURE.sizes],oci:[{operatingSystem:'Canonical Ubuntu',operatingSystemVersion:'24.04'},OCI.shapes]};
+  for(const [provider,checks] of Object.entries(CHECKS)){
+    const asked=[];current=settle(['gcp','azure','oci'].includes(provider)?toLookupsC(provider):toLookups(provider),anyRoute(provider),{},asked);
+    for(const b of checks){const reply=typeof b==='function'?b(current.step):b;current=Array.isArray(reply)&&typeof reply[0]==='number'?result(current,reply[1],reply[0],{headers:reply[2]}):result(current,plain(reply));}
+    assert.equal(current.step.form,'confirm',provider);validReview(current.step.review);showsSettings(current);
+    const rows=rowsOf(current.step.review);let compared=0;
+    for(const step of asked){
+      const f=step.fields[0],chosen=f.options&&f.options.find(o=>o.value===current.state.inputs[f.key]);if(!chosen||f.key==='endpoint')continue;
+      const label={projectId:'Project',subscriptionId:'Subscription',compartmentId:'Compartment',imageId:'Image'}[f.key]||f.label.replace(/ (ID|UUID|OCID)$/,'');
+      const x=rows.find(y=>y.label===label),v=chosen.value,named=(x.note||'').split(' · ').includes('ID '+v);
+      let said=chosen.label.replace(/ \((suggested|entered before)\)/,'');if(named)said=said.replace(' · '+v.slice(0,8),'');
+      // The same words, a number held to its unit by a no-break space.
+      assert.equal(x.value.replace(/\u00a0/g,' '),provider==='oci'&&f.key==='size'?said+' · 1 OCPU, 2 GB RAM':said,provider+' '+f.key);compared++;
+    }
+    assert.ok(compared>=2,provider);
+    // Filled in without asking (an image): its name and what the list said, with the exact ID.
+    if(['vultr','ovh','scaleway','oci'].includes(provider))assert.match(rows.find(y=>y.label==='Image').value,/Ubuntu 24\.04/,provider);
+  }
+});
+
+test('the review\'s words for an answer stay with that very value, are dropped with names, and are compact',()=>{
+  // OVHcloud: the flavor and image by name, the exact IDs beside them; the prices note says they are approximate.
+  let ovh=settle(toLookups('ovh'),routeB('ovh'));
+  assert.deepEqual(ovh.state.labels.size,[D2,'d2-2','~7.59 EUR/mo · 1 vCPU, 2 GB RAM','']);assert.ok(JSON.stringify(ovh.state.labels).length<800);
+  ovh=result(result(ovh,plain(OVH.images)),plain(OVH.flavors));
+  const flavor=rowsOf(ovh.step.review).find(x=>x.label==='Flavor');
+  assert.deepEqual(flavor,{label:'Flavor',value:'d2-2 · ~7.59\u00a0EUR/mo · 1\u00a0vCPU, 2\u00a0GB\u00a0RAM',note:'ID '+D2});
+  assert.deepEqual(ovh.step.review.notes[1],{text:'Prices are approximate, per month without tax, from OVHcloud\'s price list.',tone:'info'});
+  // Words kept for another value than the setting holds are never shown: the value alone is.
+  const stale=Object.assign(plain(ovh.state),{phase:'confirm',labels:Object.assign(plain(ovh.state.labels),{size:['other-flavor','b3-8','~37.38 EUR/mo','']})});
+  assert.deepEqual(rowsOf(plain(worker.next(stale,{type:'resume'})).step.review).find(x=>x.label==='Flavor'),{label:'Flavor',value:D2});
+  // Typed after Other: a value the list knows keeps its words, one it does not has none.
+  const sizes=upTo(toLookups('vultr'),route('vultr'),'size'),listed2=sizes.step.fields[0].options.find(o=>o.value==='vc2-1c-2gb');
+  const typed2=answer(answer(sizes,{size:'(other)'}),{size:'vc2-1c-2gb'});
+  assert.deepEqual(typed2.state.labels.size,['vc2-1c-2gb','',listed2.label.replace('vc2-1c-2gb · ',''),'']);assert.match(listed2.label,/^vc2-1c-2gb · [0-9.]+ USD\/mo · 1 vCPU, 2 GB RAM$/);
+  let typed;
+  typed=answer(answer(upTo(toLookups('vultr'),route('vultr'),'size'),{size:'(other)'}),{size:'vc9-unknown'});assert.equal(typed.state.labels.size,undefined);
+  // Lists refused: no words at all, and the review shows the settings as typed (Google Cloud's region still by its place).
+  const refusedLists=settle(toLookupsC('gcp'),()=>[403,{code:'CLOUD_HTTP_ERROR'}],{projectId:'vpn-demo-project'});assert.equal(refusedLists.state.labels,undefined);
+  const gcp=result(result(refusedLists,{name:'e2-small'}),{status:'READY'});
+  assert.deepEqual(rowsOf(gcp.step.review).slice(1,5).map(x=>x.value),['vpn-demo-project','us-central1 · Iowa','us-central1-a','e2-small']);
+  // Dropped once the review is approved, and by a new operation; a review stopped and resumed shows the same.
+  const approved=plain(worker.next(ovh.state,{type:'input',requestId:ovh.step.id,value:{approved:true}}));
+  assert.equal(approved.state.labels,undefined);assert.equal(approved.state.names,undefined);
+  const stopped=plain(worker.next(ovh.state,{type:'cancel'}));
+  assert.ok(stopped.state.labels);assert.deepEqual(plain(worker.next(stopped.state,{type:'resume'})).step.review,ovh.step.review);
+  const declined=plain(worker.next(ovh.state,{type:'input',requestId:ovh.step.id,value:{approved:false}}));
+  assert.equal(declined.state.phase,'cancelled');assert.equal(lifecycle('delete',declined.state).state.labels,undefined);
+});
+
+test('a delete review lists what goes by kind, what stays, what went before, and a console setup\'s server as kept',()=>{
+  // A delete after a stopped one: the server went, the SSH key was in the account before, a spare and an unsettled create remain.
+  const prior=provisioned('hetzner');prior.resources.server.status='deleted';Object.assign(prior.resources.key,{owned:false,status:'existing'});
+  prior.resources['firewall~7']={provider:'hetzner',type:'firewall',id:7,name:'mssh-testdeployment123',owned:true,status:'created'};
+  prior.unanswered={'test-deployment-123-provision-2-create-0':'address'};
+  const step=lifecycle('delete',prior).step;validReview(step.review);
+  // Its server is gone, and the VPN with it: the review says what is left, not "the VPN, its clients".
+  assert.equal(step.review.heading,'Delete this VPN setup on Hetzner Cloud');
+  assert.equal(step.review.notes[0].text,'The Hetzner Cloud resources listed and any more the lookup finds will be deleted. This cannot be undone.');
+  assert.deepEqual(sectionOf(step.review,'Will be deleted'),[['Primary IPv4 address','mssh-testdeployment123 · 203.0.113.10'],['Firewall','mssh-testdeployment123'],
+    ['Firewall','mssh-testdeployment123','Another copy, found by a lookup'],['On this phone','Its VPN profiles and saved server']]);
+  assert.deepEqual(sectionOf(step.review,'Kept'),[['SSH key','mssh-testdeployment123','It was in the account before; it stays.']]);
+  assert.deepEqual(sectionOf(step.review,'Already deleted'),[['Server','mssh-testdeployment123 · 203.0.113.10','','muted']]);
+  assert.deepEqual(step.review.notes.map(n=>n.tone),['danger','info','info']);assert.match(step.review.notes[1].text,/got no answer/);
+  // Scaleway's disks are listed; its power-on is a step, not a resource.
+  const scw=lifecycle('delete',provisioned('scaleway')).step.review;
+  assert.ok(sectionOf(scw,'Will be deleted').some(x=>x[0]==='Disk'&&x[1]==='boot-volume'));assert.ok(!rowsOf(scw).some(x=>/power/i.test(x.label)));
+  // A console setup: only the VPN goes from the server, which stays and bills; the user's own server says so plainly.
+  for(const [provider,heading,kept] of [['hetzner','Remove the VPN from your Hetzner Cloud server',['Server','192.0.2.10','Delete the VM, disks and public IP in the Hetzner Cloud console to stop their charges.','warning']],
+    ['existing','Remove the VPN from your server',['Server','192.0.2.10','Only the VPN is removed from it.']]]){
+    const manual=Object.assign(state('hetzner'),{provider,phase:'ready',mode:'manual',host:'192.0.2.10',resources:{},inputs:{}});
+    const r=validReview(lifecycle('delete',manual).step.review);
+    assert.equal(r.heading,heading);assert.deepEqual(sectionOf(r,'Kept'),[kept]);
+    assert.deepEqual(sectionOf(r,'Will be deleted')[0],['VPN on the server','WireGuard and its data on 192.0.2.10']);
+  }
+  // Nothing in the cloud: a setup stopped before any provider was chosen, even with an unsettled note no graph can read.
+  const none=lifecycle('delete',{version:1,deploymentId:'test-deployment-123',name:'mssh-testdeployment123',phase:'cancelled',resources:{},inputs:{},clientSequence:0,unanswered:{x:'server'}}).step;
+  assert.deepEqual(validReview(none.review),{heading:'Delete this VPN setup',sections:[{title:'Will be deleted',rows:[{label:'On this phone',value:'Its saved setup'}]}],
+    notes:[{text:'Nothing is left to delete in the cloud.',tone:'info'}]});
+});
+
+test('client and update reviews name the server and what changes, and a revoke says when it is this phone\'s profile',()=>{
+  const prior=deployed();prior.clients.push({clientId:'2',profileId:'second-profile'});
+  const add=validReview(lifecycle('createClient',prior).step.review);
+  assert.deepEqual(sectionOf(add,'New client'),[['Server','203.0.113.7'],['Profile on this phone','VPN mssh-testdeployment123']]);
+  const other=validReview(lifecycle('revokeClient',prior,{clientId:'2'}).step.review),own=validReview(lifecycle('revokeClient',prior,{clientId:'1'}).step.review);
+  assert.deepEqual(sectionOf(other,'Will be revoked'),[['Client','2'],['Server','203.0.113.7'],['Its profile on this phone','Removed with it']]);
+  assert.deepEqual(other.notes.map(n=>n.tone),['danger']);assert.deepEqual(own.notes.map(n=>n.tone),['danger','warning']);
+  const update=validReview(lifecycle('update',prior).step.review);
+  assert.deepEqual(sectionOf(update,'Update'),[['Server','203.0.113.7'],['New version','wg-easy 15.5.0'],['Version at the last check','wg-easy 15.4.0']]);
+  // The app's own update text says the restart, the disconnect and the reconnect: the notes say only what it does not.
+  assert.deepEqual(update.notes,[{text:'Existing clients keep working. If the new version does not start, the previous one is restored.',tone:'info'}]);
+  // An unknown client and a version the last check did not give are left out, not guessed.
+  delete prior.health.version;
+  assert.deepEqual(sectionOf(lifecycle('update',prior).step.review,'Update').map(x=>x[0]),['Server','New version']);
+  assert.deepEqual(sectionOf(lifecycle('revokeClient',prior,{clientId:'9'}).step.review,'Will be revoked'),[['Client','9'],['Server','203.0.113.7']]);
+});
+
+test('provider text in a review loses control and bidi characters and is cut to the limits, however much there is',()=>{
+  const prior=provisioned('digitalocean'),odd='\u202Eevil\u0000name\u2066\n'+'x'.repeat(1000);
+  prior.resources.server.name=odd;prior.resources.server.host={ip:'203.0.113.10'};prior.resources.firewall.name=['not','text'];
+  for(let i=0;i<40;i++)prior.resources['volume_'+i]={provider:'digitalocean',type:'volume',id:'vol-'+i,owned:true,status:'created'};
+  prior.resources.__proto__x={type:'__proto__',owned:true,status:'created',id:1};prior.host='203.0.113.10';
+  const r=validReview(lifecycle('delete',prior).step.review),gone=sectionOf(r,'Will be deleted');
+  // 45 receipts (the 4 made, 40 disks, one of an odd type): 10 shown, then how many more, then this phone's row, never folded.
+  assert.equal(gone.length,12);assert.deepEqual(gone[10],['More','35 more, in the full summary']);assert.deepEqual(gone[11],['On this phone','Its VPN profiles and saved server']);
+  assert.ok(gone[0][1].startsWith('evil name x')&&gone[0][1].endsWith('...')&&gone[0][1].length===120,gone[0][1]);
+  // Cut by UTF-16 units, never inside a character: 150 astral characters are 300 units.
+  prior.resources.server.name='\u{1F512}'.repeat(150);const cut=sectionOf(lifecycle('delete',prior).step.review,'Will be deleted')[0][1];
+  assert.equal(cut,'\u{1F512}'.repeat(58)+'...');assert.ok(!/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/.test(cut));
+  assert.ok(!JSON.stringify(r).includes('\\u202e')&&!/[\u202E\u2066\u0000]/.test(JSON.stringify(r)));
+  // A client id or a host from an older state gets the same treatment, and links stay https only.
+  const hostile=deployed();hostile.host='203.0.113.7\u202E';
+  const revoke=validReview(lifecycle('revokeClient',hostile,{clientId:'\u202E'+'7'.repeat(400)}).step.review);
+  assert.equal(revoke.heading,'Revoke VPN client '+'7'.repeat(17)+'...');assert.equal(rowsOf(revoke)[1].value,'203.0.113.7');
+  for(const provider of Object.keys(VALID))for(const l of confirmed(provider).step.review.links||[])assert.match(l.url,/^https:\/\//);
+  assert.equal(validReview(plain(worker.next(Object.assign(state('hetzner'),{provider:'existing',phase:'confirm',mode:'manual',host:'192.0.2.10',inputs:{}}),{type:'resume'})).step.review).links,undefined);
+});
+
+test('a Hetzner server type entered before but not orderable in the chosen location gets no words its list did not give',()=>{
+  // cx23 is sold out in fsn1: typed there after Other, it has no words; the location keeps its city.
+  let current=answer(answer(answer(readCatalog(toCatalog()),{region:'fsn1'}),{size:'(other)'}),{size:'cx23'});
+  assert.equal(current.state.labels.size,undefined);assert.deepEqual(current.state.labels.region,['fsn1','','Falkenstein, DE','']);
+  // A check refuses, the settings are asked again: cx23 is offered back as not available here, and chosen once more.
+  current=readCatalog(editAfterCheck(answer(current,{})));
+  current=answer(current,{});const offered=current.step.fields[0].options.find(o=>o.value==='cx23');
+  assert.equal(offered.label,'cx23 (entered before, not available here)');
+  current=answer(answer(current,{size:'cx23'}),{});
+  current=result(current,{server_types:[{name:'cx23',architecture:'x86',locations:[{name:'fsn1',available:true}]}]});
+  current=result(current,{locations:[{name:'fsn1'}]});assert.equal(current.step.form,'confirm');
+  assert.deepEqual(rowsOf(validReview(current.step.review)).slice(1,3),[{label:'Location',value:'fsn1 · Falkenstein, DE'},{label:'Server type',value:'cx23'}]);
+});
+
+// Fix round (2026-11-14): new settings forget a create found absent. A recovery during the questions offered "Review a new
+// creation attempt", which sent the create with half-changed settings, without their checks or the setup review.
+test('a recovery while new settings are asked never offers to send the old create again',()=>{
+  let current=result(plain(worker.next(state('linode'),{type:'resume'})),opaque,503);
+  current=result(plain(worker.next(current.state,{type:'input',value:{action:'reconcile'}})),{data:[],page:1,pages:1,results:0});
+  assert.equal(current.state.creationAbsent,true);
+  assert.ok(current.step.fields[0].options.some(option=>option.value==='recreate'));
+  current=plain(worker.next(current.state,{type:'input',value:{action:'edit'}}));
+  assert.equal(current.state.phase,'catalog');assert.equal(current.state.creationAbsent,undefined);assert.equal(current.state.allowRecreate,undefined);
+  const paused=plain(worker.next(current.state,{type:'error',requestId:current.step.id,code:'CREDENTIAL_CHANGED'}));
+  assert.equal(paused.step.form,'recovery');assert.equal(paused.state.interruptedPhase,'catalog');
+  assert.ok(!paused.step.fields[0].options.some(option=>option.value==='recreate'));
+  const refused=plain(worker.next(paused.state,{type:'input',value:{action:'recreate'}}));
+  assert.equal(refused.step.form,'recovery');assert.equal(refused.state.error.message,'Reconcile the missing resource first');
+  // A recreation approved drops the review's words with it, as a setup review approved does.
+  const again=Object.assign(state('hetzner'),{phase:'recreateConfirm',creationAbsent:true,labels:{region:['fsn1','','Falkenstein, DE','']}});
+  const approved=plain(worker.next(again,{type:'input',value:{approved:true}}));
+  assert.equal(approved.state.phase,'provision');assert.equal(approved.state.labels,undefined);
+});
+
+test('a delete review says what goes as it is: no VPN once its server is gone, a lookup\'s finds, a name only as sent',()=>{
+  // Nothing made yet but a create that got no answer: the lookup's finds are what goes, and no VPN is said to.
+  const looked=Object.assign(state('vultr'),{phase:'cancelled',resources:{},unanswered:{'test-deployment-123-provision-4-create-0':'server'}});
+  const r=validReview(lifecycle('delete',looked).step.review);
+  assert.equal(r.heading,'Delete this VPN setup on Vultr');
+  assert.deepEqual(sectionOf(r,'Will be deleted'),[['On this phone','Its saved setup']]);
+  assert.deepEqual(r.notes.map(n=>n.tone+': '+n.text),['danger: What the lookup finds in Vultr will be deleted. This cannot be undone.',
+    'info: A request of this VPN got no answer: the cloud is checked first for what it may have made, which is deleted too.']);
+  // A live server: the VPN and its clients go with the resources listed.
+  const ready=provisioned('hetzner');
+  assert.equal(lifecycle('delete',ready).step.review.notes[0].text,'The VPN, its clients and the Hetzner Cloud resources listed will be deleted. This cannot be undone.');
+  // A creation attempt names a resource only as its create sends it: a firewall rule by its own name, a reserved IP by none.
+  const named=(provider,key)=>{const s=provisioned(provider),at=worker.graph(s).findIndex(op=>op.key===key);
+    return sectionOf(plain(worker.next(Object.assign(plain(s),{phase:'recreateConfirm',index:at}),{type:'resume'})).step.review,'Will be created')
+      .filter(x=>x[0]==='Name in the cloud').map(x=>x[1]);};
+  assert.deepEqual(named('gcp','sshFirewall'),['mssh-testdeployment123-ssh']);
+  assert.deepEqual(named('digitalocean','address'),[]);
+  assert.deepEqual(named('scaleway','sshRule'),[]);
+  assert.deepEqual(named('azure','firewall'),['mssh-testdeployment123']);
+  assert.deepEqual(named('aws','address'),['mssh-testdeployment123']);
+  assert.deepEqual(named('hetzner','server'),['mssh-testdeployment123']);
+});

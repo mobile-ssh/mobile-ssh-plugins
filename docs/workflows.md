@@ -41,6 +41,52 @@ answers contain the reference and public key. Native approval is bound to the
 job, operation, deployment and bundle digest. HTTP mutations, bootstrap/client
 changes, and profile writes require it.
 
+A `confirm` step carries `summary`, an object describing what is approved,
+and `destructive: true` for a deletion or revocation. It may also carry
+`review`, a readable layout of the same approval in plain text the plugin
+writes (English), which hosts that know it lay out as a page; others show
+`summary` as before, so a plugin keeps `summary` complete and needs no newer
+`minBridgeVersion` to send both:
+
+```ts
+review: {
+  heading?: string;                    // at most 120
+  sections: Array<{                    // 1 to 8
+    title: string;                     // at most 60
+    rows: Array<{                      // 1 to 12
+      label: string;                   // at most 40
+      value: string;                   // at most 300
+      note?: string;                   // at most 160
+      tone?: 'normal' | 'warning' | 'muted';
+    }>;
+  }>;
+  notes?: Array<{text: string; tone?: 'info' | 'warning' | 'danger'}>;  // at most 4, text at most 300
+  links?: Array<{label: string; url: string}>;  // at most 2, label at most 60, an https URL of at most 300
+}
+```
+
+Lengths count UTF-16 units (Java and JavaScript string length). Text is plain,
+with no markup; a host strips control and format characters (bidi marks among
+them) and renders `review` only when every part fits these types, counts,
+lengths and tones and each link is `https`, otherwise it lays out `summary`
+itself. The host keeps its own title, framing text and buttons (a `destructive`
+step reads as a removal whatever its review says) and keeps the exact
+`summary` reachable, so nothing a review leaves out is hidden.
+
+Mobile SSH for Android also refuses, and lays out `summary` instead of, a
+review that:
+
+- holds more than 40 rows or 8000 characters in all (one within every count
+  above could still fill many screens);
+- has a text that is empty once it is put on one line without control and
+  format characters;
+- gives a tone other than one of those listed, in lower case (a tone left out
+  is the default, `normal` for a row and `info` for a note, and the default may
+  also be given);
+- has a link that is not printable ASCII, has no host of letters, digits, dots
+  and hyphens, or has a user part (`https://bank.example@host/`). A port, path
+  and query are fine; the dialog shows the link's label and its host.
+
 Use `MobileSSH.workflows.create/list/get/answer/resume/cancel/review` and
 `subscribe` for UI. Answers require the current revision and request ID.
 `review` can also re-enter a lost cloud credential on a paused HTTP intent.
@@ -491,6 +537,59 @@ an Azure size with a lower-case `p` among its feature letters (Arm), and an
 Oracle Cloud shape the domain's list gives as fixed (`isFlexible: false`) or
 as not allowing 1 OCPU and 2 GB; before, each failed only at the server's
 create, after the network resources were made.
+
+VPN Setup 1.0.7 sends `review` with every confirm step, for every provider and
+the user's own server, and keeps `summary` exactly as 1.0.6 sent it:
+
+- A new VPN: "New VPN server on <provider>"; a Server section with each setting
+  by its value and what its list said of that very value (`hel1 · Helsinki,
+  FI`, `cx23 · 3.80 EUR/mo · 2 vCPU, 4 GB RAM`, Hetzner's public IPv4 price as
+  the server type's note; a value that is an ID by its name, the ID itself as
+  the note, as an OVHcloud flavor, an Oracle Cloud image or a project), the
+  Ubuntu 24.04 the create names, and the server's name; an Access section (SSH
+  from any address or only the CIDR, UDP 51820 open to any address, the pinned
+  wg-easy release, the VPN profile name the import saves); "Checked with
+  <provider>" listing the read-only checks passed; the billing note (and where
+  prices are approximate or absent, a note saying so) and the provider's
+  pricing link. A typed value shows as typed, with a place the worker knows for
+  it (Google Cloud and Oracle Cloud regions, Scaleway zones). A console setup
+  or the user's own server shows its address and SSH user, and what still bills.
+- A delete: "Will be deleted" lists each owned resource still there by kind
+  (Server, Primary IPv4 address, Firewall, SSH key, Disk, ...; a Scaleway
+  power-on and a Lightsail attachment are steps, not resources) with its name
+  and address, a console setup's VPN on the server, and this phone's profiles;
+  "Kept" what was in the account before (and a console setup's server, with
+  what to delete in its console); "Already deleted" what an earlier delete
+  removed. A danger note says it cannot be undone, and another when unsettled
+  creates are looked up first; it names the VPN and its clients only while the
+  server is still there, and a lookup's finds when one is due. Past 12 rows, a
+  row says how many more the summary holds, and this phone's row stays last.
+- A new creation attempt (the resource's name only as its create sends it),
+  adding or revoking a client (and whether it is the one this phone's VPN uses)
+  and the WireGuard update (with the version the last check found) get short
+  reviews of their own. The update's note says only what the app's own update
+  text above it does not: clients keep working, and a failed start restores the
+  previous version.
+- A price or size keeps its number with its unit (`4 GB`, `3.80 EUR/mo`) by a
+  no-break space, so a narrow screen never wraps between them.
+
+The words for an answer are kept in the state as `labels`
+(`{<key>: [value, name, detail, note]}`), taken from what the answer's list
+showed when it is answered or filled in (a value typed after Other too, when
+its list knows it), shown only while the setting still holds that value, and
+dropped with `names` once the review is approved (a new creation attempt's
+too) and by a new operation. A review that cannot be built is left out: the
+summary still says it all.
+
+One recovery changed. After a create that got no answer was looked up and not
+found, **Change server settings** now forgets that it may be sent again: if the
+new questions stopped (a lookup's credentials changed, say), 1.0.6 still offered
+**Review a new creation attempt**, which sent the create with the half-changed
+settings, without their checks or the setup review. Now the settings are
+answered and checked, and reviewed, again. Otherwise nothing changed: random
+walks over every provider's lists, checks, creates, deletes and lifecycle
+operations, compared transition by transition with 1.0.6, differ only in
+`review`, `labels` and that recovery.
 
 The VPN Setup bundle implements ten provider adapters plus an existing-server
 path. Its fixtures validate transitions, recovery, deletion and installer

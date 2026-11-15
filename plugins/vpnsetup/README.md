@@ -97,13 +97,21 @@ for the console path; more RAM makes installation and upgrades less constrained.
 5. Review the resources and current provider pricing page. Provisioning begins
    only after native approval. Provider accounts, billing activation, terms,
    capacity and quota approval are completed in the provider's console.
+   From VPN Setup 1.0.7, on app versions that support it, the review is a
+   readable page rather than raw settings: the provider, the location with its
+   city, the server type or plan with its price, cores and memory as the list
+   showed them, the image by name, who may connect over SSH, the checks that
+   passed, what bills and a link to the provider's prices. A setting shown by
+   its name (an OVHcloud flavor, say) has its exact ID beside it.
 6. Approve the server's SSH host key using Mobile SSH's trust UI. The app creates
    a saved SSH server, installs wg-easy, and imports its first VPN profile.
 7. Connect using the VPN page. A successful import does not by itself establish
    an internet route; check the WireGuard handshake and test internet access.
 
 **Check server**, **Add client**, **Revoke client**, **Update WireGuard**, and
-**Delete deployment** operate on the saved deployment. With Mobile SSH bridge
+**Delete deployment** operate on the saved deployment; from 1.0.7 their reviews
+say what changes, and a deletion lists by kind and name each cloud resource it
+deletes, what it keeps and what an earlier deletion removed. With Mobile SSH bridge
 1.4.0 or newer, **Check server** also shows the running wg-easy version and
 whether an update is available (older hosts drop that information), and
 **Update WireGuard** is offered unless the last check found the pinned release

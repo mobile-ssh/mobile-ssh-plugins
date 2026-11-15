@@ -620,7 +620,17 @@
       full=here.map(x=>({value:x.t.n,label:sizeLabel(x,c.currency,x===here[0])}));
     }
     else return null;
-    return {full,suggested,sorted,priced:sorted&&!!c.currency,cap:LISTED,away:v=>key==='size'&&!full.some(o=>o.value===v)&&c.types.some(t=>t.n===v)};
+    return {full,suggested,sorted,priced:sorted&&!!c.currency,cap:LISTED,away:v=>key==='size'&&!full.some(o=>o.value===v)&&c.types.some(t=>t.n===v),
+      about:v=>hetznerAbout(c,all,s.inputs.region,key,v)};
+  }
+  // The review's words for a Hetzner answer (1.0.7), as its list shows them: a location's city and country; a server type
+  // orderable in the chosen location, its price there, cores and memory, and in a note the public IPv4 address's price there
+  // (its prices leave it out). A type not orderable there gets none, as its list said none.
+  function hetznerAbout(c,all,region,key,v) {
+    if(key==='region')return {name:'',detail:(c.locations.find(p=>p[0]===v)||[])[1]||''};
+    const x=all.find(o=>o.loc===region&&o.t.n===v),ip=x&&x.price!==null&&c.currency&&(c.ipv4||[]).find(p=>p[0]===region);
+    return {name:'',detail:x?[x.price!==null&&c.currency?money(x.price,c.currency)+'/mo':'',[x.t.c&&x.t.c+' vCPU',x.t.m&&x.t.m+' GB RAM'].filter(Boolean).join(', ')]
+      .filter(Boolean).join(' · '):'',note:ip?'Plus '+money(ip[1],c.currency)+'/mo for its public IPv4 address':''};
   }
   // Any provider's list as asked (full: its answers, suggestion first in price order; cap: how many before Other).
   // lead: the suggestion is not the cheapest listed (one cheaper is low on stock, say).
@@ -1124,8 +1134,10 @@
     // first by name is selected, not called suggested. Two of the same name are told apart by their ID's start.
     const mark=e=>e.value===suggested&&(!x.account||!!base&&base.value===suggested)?' (suggested)':'';
     const twin=e=>!!x.account&&!!given(e.name)&&entries.filter(y=>given(y.name)===given(e.name)).length>1;
-    const full=entries.map(e=>({value:e.value,label:[shownName(e)+mark(e),x.sizes?[cost(e)<Infinity&&currency?(from.approx?'~':'')+money(e.price,currency)+'/mo':'',
-      [e.c&&e.c+' vCPU',e.m&&e.m+' GB RAM'].filter(Boolean).join(', ')].filter(Boolean).join(' · '):[twin(e)?e.value.slice(0,8):'',place(e.rest)||given(e.rest)].filter(Boolean).join(' · '),
+    // What an entry's label says after its name: a size's price and specs, else its place or description (the review's too).
+    const shows=e=>x.sizes?[cost(e)<Infinity&&currency?(from.approx?'~':'')+money(e.price,currency)+'/mo':'',
+      [e.c&&e.c+' vCPU',e.m&&e.m+' GB RAM'].filter(Boolean).join(', ')]:[place(e.rest)||given(e.rest)];
+    const full=entries.map(e=>({value:e.value,label:[shownName(e)+mark(e),(!x.sizes&&twin(e)?[e.value.slice(0,8)]:[]).concat(shows(e)).filter(Boolean).join(' · '),
       typeof e.note==='string'?e.note:''].filter(Boolean).join(' · ')}));
     const away=Array.isArray(x.away)?x.away:[];
     // A long list (Oracle Cloud's regions, a large account's projects) keeps the provider's main regions (MAIN), then the
@@ -1139,8 +1151,11 @@
     const knownNames=Array.isArray(x.names)?x.names:[];
     const named=v=>{const e=entries.find(y=>y.value===v),k=knownNames.find(y=>Array.isArray(y)&&y[0]===v);
       const n=given(e?e.name:k&&k[1]),detail=key==='imageId'&&e?given(e.rest):'';return n&&n!==v?[n,detail].filter(Boolean).join(' · '):detail;};
+    // The review's words for a value (1.0.7): its name where the value is an ID, and what its label says after the name.
+    const about=v=>{const e=entries.find(y=>y.value===v),k=knownNames.find(y=>Array.isArray(y)&&y[0]===v),n=given(e?e.name:k&&k[1]);
+      return {name:n&&n!==v?n:'',detail:e?shows(e).concat(typeof e.note==='string'?e.note:'').filter(Boolean).join(' · '):''};};
     return {full,suggested,sorted:!!x.sizes&&(priced||!!x.ranked)&&!x.partial,priced:!!x.sizes&&priced&&!!currency,cap:x.sizes?LISTED:Infinity,lead:!!x.sizes&&suggested!==entries[0].value,
-      away:v=>away.includes(v)&&!full.some(o=>o.value===v),within,named};
+      away:v=>away.includes(v)&&!full.some(o=>o.value===v),within,named,about};
   }
   // The lookup the question at optionIndex waits for, if any.
   function lookupDue(s) {
@@ -1241,6 +1256,14 @@
     if(n)s.names=Object.assign(s.names||{},{[key]:n});
     else if(s.names){delete s.names[key];if(!Object.keys(s.names).length)delete s.names;}
   }
+  // What the review says of an answer the lists know (1.0.7), kept with the value it describes, since the lists go before the
+  // checks: labels[key] = [value, name or '', detail, note]. Typed values the lists know get it too; others none. Shown only
+  // while the setting still holds that value; dropped with names. It never changes how the questions go: anything odd, none.
+  function labelOf(s,key,value) {
+    let x={};try{const found=value&&s.catalog&&(LOOKUPS[s.provider]?listing(s,key):hetznerList(s,key));x=found&&found.about&&found.about(value)||{};}catch(_){x={};}
+    if(x.name||x.detail||x.note)s.labels=Object.assign(s.labels||{},{[key]:[value,x.name||'',x.detail||'',x.note||'']});
+    else if(s.labels){delete s.labels[key];if(!Object.keys(s.labels).length)delete s.labels;}
+  }
   // The question's explanation, which the native review shows under its title: the question itself, what is listed or what
   // to type, prices, and how to give another answer.
   function optionMessage(s,current) {
@@ -1257,9 +1280,155 @@
       ' For another one, choose Other.';
   }
 
+  // VPN Setup 1.0.7: a confirm step also carries `review`, the readable form the native review lays out (docs/workflows.md):
+  // a heading, sections of label/value rows, notes and https links, in plain English; `summary` stays as it was, for apps
+  // before it. Each value is what will be sent, or what the lists said of that very value. Text from a provider (a host, a
+  // name) loses control and format characters, bidi marks among them, and every text is cut within the limits, which count
+  // UTF-16 units (as Java and JavaScript strings do), never inside a character.
+  const LIMIT={heading:120,title:60,label:40,value:300,note:160,text:300,link:60,url:300,sections:8,rows:12,notes:4,links:2};
+  const own=(o,k)=>o&&typeof o==='object'&&Object.prototype.hasOwnProperty.call(o,k)?o[k]:undefined;
+  // A no-break space stays one: it holds a number to its unit (glue).
+  const words=(v,max)=>{if(typeof v!=='string'&&!(typeof v==='number'&&Number.isFinite(v)))return '';
+    const t=String(v).replace(/\p{C}+/gu,' ').replace(/[^\S\u00a0]+/g,' ').trim();if(t.length<=max)return t;
+    let cut='';for(const c of t){if(cut.length+c.length>max-3)break;cut+=c;}return cut.trimEnd()+'...';};
+  // A row, or null without a value. tone: 'warning' or 'muted'.
+  const row=(label,value,note,tone)=>{const v=words(value,LIMIT.value),n=words(note,LIMIT.note);
+    return v?Object.assign({label:words(label,LIMIT.label)||'Item',value:v},n?{note:n}:{},tone?{tone}:{}):null;};
+  // A section of the rows that have a value, or null; past twelve the last one says how many more the summary holds. The rows
+  // in `last` (what this phone removes) come after them and are never among those counted.
+  function section(title,rows,last) {
+    const tail=(last||[]).filter(Boolean),all=rows.filter(Boolean),room=LIMIT.rows-tail.length,more=all.length-room+1;
+    return all.length+tail.length?{title:words(title,LIMIT.title),rows:(more>1?all.slice(0,room-1).concat(row('More',more+' more, in the full summary')):all).concat(tail)}:null;
+  }
+  // notes: [tone, text], tone 'info', 'warning' or 'danger'; links: [label, https URL]. null without a section.
+  function review(heading,sections,notes,links) {
+    const r=Object.assign(words(heading,LIMIT.heading)?{heading:words(heading,LIMIT.heading)}:{},{sections:sections.filter(Boolean).slice(0,LIMIT.sections)});
+    const n=notes.filter(x=>x&&words(x[1],LIMIT.text)).slice(0,LIMIT.notes).map(([tone,text])=>({text:words(text,LIMIT.text),tone}));
+    const l=links.filter(x=>x&&typeof x[1]==='string'&&x[1].length<=LIMIT.url&&/^https:\/\/[A-Za-z0-9.-]+(\/[\x21-\x7e]*)?$/.test(x[1]))
+      .slice(0,LIMIT.links).map(([label,url])=>({label:words(label,LIMIT.link),url}));
+    if(n.length)r.notes=n;if(l.length)r.links=l;
+    return r.sections.length?r:null;
+  }
+  // A confirm step's review, or none when anything about it fails: the summary still says it all.
+  const reviewed=(s,make)=>{try{const r=make(s);return r?{review:r}:{};}catch(_){return {};}};
+  const profileName=s=>'VPN '+s.name; // The VPN profile vpn.import saves on the phone.
+  // A number held to its unit, so a narrow dialog never breaks "4 GB" or "3.80 EUR/mo" across lines; the list's own words otherwise.
+  const glue=t=>t.replace(/\b(\d+(?:\.\d+)?) (?=[A-Za-z])/g,'$1\u00a0').replace(/\bGB RAM\b/g,'GB\u00a0RAM');
+  const sentence=parts=>parts.length<2?parts.join(''):parts.slice(0,-1).join(', ')+' and '+parts[parts.length-1];
+  // The name a create request gives its resource, as sent; '' when it sends none (a DigitalOcean reserved IP, a Scaleway rule).
+  // Azure names each resource by its URL.
+  function sentName(s,op) {
+    const c=op&&op.create||{},b=c.body&&typeof c.body==='object'?c.body:{};
+    const v=[b.name,b.label,b.displayName,b.keyPairName,get(b,'targetSpec.name'),Array.isArray(b.instanceNames)?b.instanceNames[0]:undefined,
+      op.key==='address'?b.staticIpName:undefined,op.key==='firewall'?b.description:undefined].find(x=>typeof x==='string'&&x);
+    if(v)return v;
+    return s.provider==='azure'&&c.method==='PUT'&&typeof c.url==='string'?decodeURIComponent(c.url.split('?')[0].split('/').pop()):'';
+  }
+  // A setting's label: its field's, without a trailing ID kind ("Flavor ID": Flavor); images and accounts by what they are.
+  const REVIEW_LABEL={projectId:'Project',subscriptionId:'Subscription',compartmentId:'Compartment',imageId:'Image'};
+  // A place the worker itself knows for a value no list described (typed): Google Cloud's and Oracle Cloud's regions, Scaleway's zones.
+  function knownPlace(s,key,v) {
+    const at=table=>(table.find(x=>x[0]===v)||[])[1]||'';
+    return key==='region'&&s.provider==='gcp'?own(GCP_PLACES,v)||'':key==='region'&&s.provider==='oci'?at(OCI_REGIONS):key==='zone'&&s.provider==='scaleway'?at(SCW_ZONES):'';
+  }
+  // A setting's rows: its value, or its name where it is an ID (the ID then in the note, or a row of its own when too long), and
+  // what the list said of it (labels); a fixed list's own label (OVHcloud's API sites); an Oracle Cloud shape with the size the
+  // create asks for (shapeConfig) and the price its list gives that size.
+  function settingRows(s,f) {
+    const v=s.inputs[f.key],l=get(s,'labels.'+f.key),said=Array.isArray(l)&&l[0]===v?l:[v,'','',''],label=REVIEW_LABEL[f.key]||f.label.replace(/ (ID|UUID|OCID)$/,'');
+    if(typeof v!=='string'||!v)return [];
+    const fixed=Array.isArray(f.options)&&(f.options.find(o=>o.value===v)||{}).label;
+    if(fixed)return [row(label,fixed)];
+    const name=words(said[1],LIMIT.label),parts=[name||v,glue(words(said[2],LIMIT.value)||knownPlace(s,f.key,v))];
+    if(s.provider==='oci'&&f.key==='size')parts.push(said[2]||!own(OCI_PRICES,v)?'':glue('~'+money(own(OCI_PRICES,v),'USD')+'/mo'),glue('1 OCPU, 2 GB RAM'));
+    const value=parts.filter(Boolean).join(' · '),about=glue(words(said[3],LIMIT.note)),note=[about,name?'ID '+v:''].filter(Boolean).join(' · ');
+    return note.length>LIMIT.note?[row(label,value,about),row(label+' ID',v)]:[row(label,value,note)];
+  }
+  const IMAGE_NAMED=['digitalocean','hetzner','gcp','aws','azure','linode']; // Their create names Ubuntu 24.04 itself.
+  // A new VPN (confirm): where, on what and at what price, as the lists showed it; access; the checks passed; billing.
+  function createReview(s) {
+    const [cloud,pricing]=PROVIDERS[s.provider],existing=s.provider==='existing',link=[[cloud+' prices',pricing]];
+    const vpn=[row('VPN software','WireGuard (wg-easy '+RELEASE+')'),row('Profile on this phone',profileName(s))];
+    if(s.mode!=='automatic')return review(existing?'Install the VPN on your server':'Install the VPN on your '+cloud+' server',
+      [section('Server',[row('Address',s.host),row('SSH user',s.user),existing?null:row('Created in',cloud+' console')]),
+        section('VPN',[row('VPN port','UDP 51820','The server\'s firewall must allow it.')].concat(vpn))],
+      [existing?['info','Nothing is created in a cloud account: the VPN is installed on this server over SSH.']:
+        ['warning','The server you created in the '+cloud+' console bills until you delete it there. Deleting this VPN removes only the VPN.']],existing?[]:link);
+    const server=section('Server',[row('Cloud',cloud)].concat(...OPTIONS[s.provider].map(f=>settingRows(s,f)),
+      IMAGE_NAMED.includes(s.provider)?row('System','Ubuntu 24.04 LTS'):null,row('Server name',s.name,'The resources made with it get this name too.')));
+    const ssh=typeof s.inputs.sshCidr==='string'?s.inputs.sshCidr:'',prices=(LOOKUPS[s.provider]||{}).prices;
+    return review('New VPN server on '+cloud,[server,
+      section('Access',[row('SSH access',ssh==='0.0.0.0/0'?'Any address (0.0.0.0/0)':ssh&&'Only from '+ssh,'Logins need this setup\'s SSH key.'),
+        row('VPN port','UDP 51820, open to any address')].concat(vpn)),
+      section('Checked with '+cloud,list(s,'verified').filter(c=>typeof c==='string').map(c=>row(c,'Confirmed')))],
+      [['warning',cloud+' bills for the server and what is made for it until they are deleted. Public IPv4 and bandwidth may be charged separately.'],
+        prices&&server.rows.some(r=>/\/mo\b/.test(r.value))?['info',prices.trim()]:['gcp','azure'].includes(s.provider)?['info',cloud+'\'s API gives no prices: its pricing page has them.']:null],link);
+  }
+  // What each receipt is, as its provider calls it; others by their key.
+  const KIND={key:'SSH key',server:'Server',address:'Public IPv4 address',firewall:'Firewall',sshRule:'Firewall rule for SSH',vpnRule:'Firewall rule for WireGuard',
+    sshFirewall:'Firewall rule for SSH',vpnFirewall:'Firewall rule for WireGuard',network:'Network',group:'Resource group',nic:'Network interface',gateway:'Internet gateway',
+    route:'Route table',subnet:'Subnet',vnic:'Network attachment',privateIp:'Private IP address',volume:'Disk'};
+  const KINDS={hetzner:{address:'Primary IPv4 address'},digitalocean:{address:'Reserved IP address',firewall:'Cloud firewall'},
+    aws:{key:'Key pair',address:'Static IP address',firewall:'Open ports'},azure:{firewall:'Network security group',network:'Virtual network'},
+    gcp:{network:'VPC network',address:'Static IP address'},linode:{firewall:'Cloud Firewall'},vultr:{firewall:'Firewall group'},
+    oci:{network:'Virtual cloud network',firewall:'Security list',address:'Reserved public IP address'},ovh:{firewall:'Security group'},
+    scaleway:{firewall:'Security group',address:'Flexible IP address'}};
+  const kindOf=(s,type)=>own(own(KINDS,s.provider),type)||own(KIND,type)||words(type,LIMIT.label)||'Resource';
+  // A receipt by its name and address, else its id (an Azure or Google Cloud path by its last part).
+  const which=x=>[...new Set([x.name,x.host].map(v=>words(v,120)).filter(Boolean))].join(' · ')||
+    words(typeof x.id==='string'?x.id.split('/').filter(Boolean).pop():x.id,120)||'Unnamed';
+  // A delete: each owned receipt by kind, the server's own VPN for a console setup, what this phone removes; what stays.
+  // A Scaleway power-on and a Lightsail attachment are steps, not resources: they go with their server.
+  function deleteReview(s) {
+    const cloud=(own(PROVIDERS,s.provider)||[''])[0],existing=s.provider==='existing',manual=s.mode==='manual'&&!!s.host,host=s.host;
+    const rank=x=>{const at=['server','address','firewall','key'].indexOf(x.type);return at<0?9:at;};
+    const all=Object.entries(s.resources&&typeof s.resources==='object'?s.resources:{}).filter(([,x])=>x&&typeof x==='object'&&!['power','attachment'].includes(x.type))
+      .sort((a,b)=>rank(a[1])-rank(b[1]));
+    const rows=(note,tone)=>([key,x])=>row(kindOf(s,typeof x.type==='string'?x.type:key),which(x),key.includes('~')?'Another copy, found by a lookup':note,tone);
+    const live=all.filter(([,x])=>x.owned===true&&x.status!=='deleted');let pending=false;try{pending=unsettled(s).length>0;}catch(_){}
+    const cloudy=!manual&&!!cloud&&!existing&&(live.length>0||pending);
+    // The VPN itself is said to go only while its server does (or a host with no server receipt): one already deleted took it.
+    const vpn=live.some(([,x])=>x.type==='server')||!!host&&!all.some(([,x])=>x.type==='server');
+    const goes=sentence([vpn?'the VPN, its clients':'',live.length?'the '+cloud+' resources listed':'',
+      pending?(live.length?'any more the lookup finds':'what the lookup finds in '+cloud):''].filter(Boolean));
+    return review(manual?'Remove the VPN from your '+(existing?'server':cloud+' server'):cloudy?(vpn?'Delete the VPN on ':'Delete this VPN setup on ')+cloud:'Delete this VPN setup',[
+      section('Will be deleted',[manual?row('VPN on the server','WireGuard and its data on '+words(host,120)):null].concat(live.map(rows(''))),
+        [row('On this phone',host?'Its VPN profiles and saved server':'Its saved setup')]),
+      section('Kept',[manual?row('Server',host,existing?'Only the VPN is removed from it.':'Delete the VM, disks and public IP in the '+cloud+' console to stop their charges.',existing?'':'warning'):null]
+        .concat(all.filter(([,x])=>x.owned!==true).map(rows('It was in the account before; it stays.')))),
+      section('Already deleted',all.filter(([,x])=>x.owned===true&&x.status==='deleted').map(rows('','muted')))],
+      [cloudy||manual?['danger',manual?'The VPN and its clients will be removed from the server. This cannot be undone.':
+        goes.charAt(0).toUpperCase()+goes.slice(1)+' will be deleted. This cannot be undone.']:null,
+        (s.mode==='automatic'||!cloud)&&!cloudy?['info','Nothing is left to delete in the cloud.']:null,
+        pending?['info','A request of this VPN got no answer: the cloud is checked first for what it may have made, which is deleted too.']:null,
+        host?['info','If this phone is connected through this VPN, it is disconnected first.']:null],[]);
+  }
+  // A create sent again after its lookup found nothing.
+  function recreateReview(s) {
+    const [cloud,pricing]=PROVIDERS[s.provider],op=graph(s)[s.index],key=op.key;
+    return review('New creation attempt on '+cloud,[section('Will be created',[row('Resource',kindOf(s,key)),row('Cloud',cloud),
+      row('Name in the cloud',sentName(s,op))].concat(...(key==='server'?OPTIONS[s.provider].map(f=>settingRows(s,f)):[])))],
+      [['warning','Nothing matching was found. Check the '+cloud+' console for a resource created late before approving: a new one can add charges.']],[[cloud+' prices',pricing]]);
+  }
+  function clientReview(s) {
+    if(s.operation==='createClient')return review('Add a VPN client',[section('New client',[row('Server',s.host),row('Profile on this phone',profileName(s))])],
+      [['info','The server registers a new WireGuard client, and its profile is added to this phone. Existing clients keep working.']],[]);
+    const id=s.targetClientId,client=(Array.isArray(s.clients)?s.clients:[]).find(x=>x&&x.clientId===id);
+    return review(words(id,20)?'Revoke VPN client '+words(id,20):'Revoke a VPN client',[section('Will be revoked',[row('Client',id),row('Server',s.host),
+      client?row('Its profile on this phone','Removed with it'):null])],
+      [['danger','Devices using this client can no longer connect through this VPN. This cannot be undone; a new client can be added later.'],
+        client&&client.profileId===s.profileId?['warning','This phone\'s VPN uses this client\'s profile, which is removed.']:null],[]);
+  }
+  function updateReview(s) {
+    const v=get(s,'health.version'),was=typeof v==='string'&&/^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$/.test(v)?'wg-easy '+v:'';
+    return review('Update WireGuard to '+RELEASE,[section('Update',[row('Server',s.host),row('New version','wg-easy '+RELEASE),row('Version at the last check',was)])],
+      // The app's own text above it says the restart, the disconnect and the reconnect (label_workflow_update_review).
+      [['info','Existing clients keep working. If the new version does not start, the previous one is restored.']],[]);
+  }
+
   function output(s, step) { s.pending = step ? step.id : null; return {state:s,step:step || {kind:'complete',id:s.deploymentId+'-done',result:{deploymentId:s.deploymentId,status:s.phase}}}; }
-  function input(s, form, title, fields, more) {
-    return output(s,Object.assign({kind:'input',id:s.deploymentId+'-'+s.phase,form,title,fields:fields||[]},more||{}));
+  function input(s, form, title, fields, more, readable) {
+    return output(s,Object.assign({kind:'input',id:s.deploymentId+'-'+s.phase,form,title,fields:fields||[]},more||{},readable||{}));
   }
   function http(s, req, stage) {
     s.httpStage=stage;
@@ -1548,7 +1717,7 @@
       const due=lookupDue(s);
       if(due){s.catalogRead={name:due.name,page:1,attempt:0};s.phase='catalog';return render(s);}
       const auto=automatic(s);
-      if(auto!==null){const k=OPTIONS[s.provider][s.optionIndex||0].key;s.inputs[k]=auto;nameOf(s,k,auto);s.optionIndex=(s.optionIndex||0)+1;return render(s);}
+      if(auto!==null){const k=OPTIONS[s.provider][s.optionIndex||0].key;s.inputs[k]=auto;nameOf(s,k,auto);labelOf(s,k,auto);s.optionIndex=(s.optionIndex||0)+1;return render(s);}
       const current=optionField(s),asked=(QUESTIONS[s.provider]||{})[current.key],message=optionMessage(s,current);
       // Asked again after an answer it could not use: why, as the native review's message and the page's problem.
       const refused=s.optionProblem?{message:s.optionProblem,error:{code:'invalid_setting',message:s.optionProblem}}:{};
@@ -1559,7 +1728,8 @@
     if(s.phase==='manualUser')return input(s,'instance','Which SSH user should connect?',[
       field('user','SSH user',PROVIDERS[s.provider][2])],{guide:'guides/'+s.provider+'.md'});
     if(s.phase==='confirm')return input(s,'confirm','Review VPN setup',[],{summary:Object.assign({provider:PROVIDERS[s.provider][0],name:s.name,
-      settings:s.inputs},s.names&&s.mode==='automatic'?{names:s.names}:{},{host:s.host,verified:s.verified||[],pricingUrl:PROVIDERS[s.provider][1],billing:'Cloud billing continues until its resources are deleted. Public IPv4 and bandwidth may be charged separately.'})});
+      settings:s.inputs},s.names&&s.mode==='automatic'?{names:s.names}:{},{host:s.host,verified:s.verified||[],pricingUrl:PROVIDERS[s.provider][1],billing:'Cloud billing continues until its resources are deleted. Public IPv4 and bandwidth may be charged separately.'})},
+      reviewed(s,createReview));
     if(s.phase==='preflight') {
       const check=preflight(s)[s.preflightIndex||0];
       if(!check){s.phase='confirm';return render(s);}
@@ -1591,15 +1761,15 @@
       ...(elsewhere(s)&&get(s,'error.message')===OTHER_ACCOUNT?[{value:'sameAccount',label:SAME_ACCOUNT}]:[]),
       {value:'cleanup',label:'Review removal of created resources'},{value:'keep',label:'Keep resources and stop'}]})],Object.assign(reason,{resources:s.resources}));
     if(s.phase==='recreateConfirm')return input(s,'confirm','Approve a new creation attempt?',[],{summary:{provider:s.provider,name:s.name,
-      resource:graph(s)[s.index].key,warning:'No matching resource was found. Check the cloud console for delayed creation before approving; a new resource can add charges.'}});
+      resource:graph(s)[s.index].key,warning:'No matching resource was found. Check the cloud console for delayed creation before approving; a new resource can add charges.'}},reviewed(s,recreateReview));
     if(s.phase==='deleteConfirm')return input(s,'confirm','Delete this deployment?',[],{destructive:true,summary:{deploymentId:s.deploymentId,
       provider:s.provider,host:s.host,resources:s.resources,warning:s.mode==='manual'
         ?'The VPN container, its data and local client profiles will be removed. Delete the VM, disks and public IP separately in your cloud console to stop their charges.'
-        :'The VPN, clients and owned cloud resources will be removed. This cannot be undone.'}});
+        :'The VPN, clients and owned cloud resources will be removed. This cannot be undone.'}},reviewed(s,deleteReview));
     if(s.phase==='clientConfirm')return input(s,'confirm',s.operation==='createClient'?'Register a new VPN client?':'Revoke this VPN client?',[],{
-      destructive:s.operation==='revokeClient',summary:{deploymentId:s.deploymentId,host:s.host,clientId:s.targetClientId,operation:s.operation}});
+      destructive:s.operation==='revokeClient',summary:{deploymentId:s.deploymentId,host:s.host,clientId:s.targetClientId,operation:s.operation}},reviewed(s,clientReview));
     if(s.phase==='updateConfirm')return input(s,'confirm','Update WireGuard to '+RELEASE+'?',[],{summary:{deploymentId:s.deploymentId,host:s.host,operation:'update',version:RELEASE,
-      warning:'Installs wg-easy '+RELEASE+' and restarts WireGuard on the server. Existing clients and VPN profiles stay. If this phone is connected through this server, its VPN is turned off first: reconnect when the update finishes. If the new version does not start, the previous one is restored.'}});
+      warning:'Installs wg-easy '+RELEASE+' and restarts WireGuard on the server. Existing clients and VPN profiles stay. If this phone is connected through this server, its VPN is turned off first: reconnect when the update finishes. If the new version does not start, the previous one is restored.'}},reviewed(s,updateReview));
     // A read of another resource this VPN holds, sent only to learn whether the credentials reach its account (unproven).
     const verify=s.verifyKey&&['provision','cleanupFind','cleanup','cleanupExtra'].includes(s.phase)&&graph(s).find(op=>op.key===s.verifyKey);
     if(verify)return http(s,verify.read,'verify');
@@ -1614,7 +1784,7 @@
     }
     if(s.phase==='wait'||s.phase==='cleanupWait'||s.phase==='extraWait')return output(s,{kind:'delay',id:s.deploymentId+'-'+s.phase+'-'+s.index+'-'+s.attempt,milliseconds:Math.min(30000,2000*Math.pow(2,Math.min(4,s.attempt))),delayMs:Math.min(30000,2000*Math.pow(2,Math.min(4,s.attempt)))});
     if(['bootstrap','health','createClient','revokeClient','update'].includes(s.phase))return ssh(s,s.phase);
-    if(s.phase==='import')return output(s,{kind:'vpn.import',id:s.deploymentId+'-import-'+s.clientSequence,configRef:s.configRef,name:'VPN '+s.name,
+    if(s.phase==='import')return output(s,{kind:'vpn.import',id:s.deploymentId+'-import-'+s.clientSequence,configRef:s.configRef,name:profileName(s),
       deploymentId:s.deploymentId,clientId:s.lastClientId});
     if(s.phase==='deleteServer')return ssh(s,'delete');
     if(s.phase==='cleanup') {
@@ -1664,7 +1834,7 @@
         s=Object.assign(clone(prior),{operation,targetClientId:get(snapshot,'inputs.clientId'),pending:null,error:null});
         // The snapshot is the deployment's latest job, which may have stopped part-way, such as a delete stopped after
         // its server went: its receipts carry over, its progress does not (a stale creationAbsent offered recreation).
-        for(const key of ['interruptedPhase','suspendedPhase','httpStage','extraCleanup','creationAbsent','creationSent','allowRecreate','checkStatus','optionProblem','accountResumePhase','verifyKey','verifyStage','dropletCheck','dropletSeen','finding','findMoved','sameAccountAsked','catalog','catalogRead','typing','custom','preflightPage','tenancyId','names'])delete s[key];
+        for(const key of ['interruptedPhase','suspendedPhase','httpStage','extraCleanup','creationAbsent','creationSent','allowRecreate','checkStatus','optionProblem','accountResumePhase','verifyKey','verifyStage','dropletCheck','dropletSeen','finding','findMoved','sameAccountAsked','catalog','catalogRead','typing','custom','preflightPage','tenancyId','names','labels'])delete s[key];
       }
       s.version=1;s.operation=operation;s.deploymentId=s.deploymentId||get(snapshot,'inputs.deploymentId');
       if(!/^[a-zA-Z0-9_-]{1,64}$/.test(s.deploymentId||''))throw new Error('Native runner must supply a stable deploymentId');
@@ -1710,7 +1880,7 @@ s.phase=s.accountResumePhase||(s.sshCredentialRef?'options':'sshKey');if(s.accou
           // A listed question takes only what it lists (the native review and the voice offer nothing else).
           const problem=settingProblem(f,value)||(f.options&&!f.options.some(o=>o.value===value)?'Choose one of the listed answers.':'');
           if(problem){s.optionProblem=problem;return render(s);}
-          delete s.optionProblem;s.inputs[f.key]=value;nameOf(s,f.key,f.options&&value);
+          delete s.optionProblem;s.inputs[f.key]=value;nameOf(s,f.key,f.options&&value);labelOf(s,f.key,value);
           // A value typed while the catalog lists (after Other, or other than the default for a location it lists nothing in) is
           // offered again, as entered before, when the settings are asked again; another answer forgets it. Typed with no catalog,
           // or the default left as it was, it is only the earlier answer (an untouched cx23 is no choice to offer back).
@@ -1724,7 +1894,7 @@ s.phase=s.accountResumePhase||(s.sshCredentialRef?'options':'sshKey');if(s.accou
         }
         else if(s.phase==='manual'){if(!/^\d{1,3}(\.\d{1,3}){3}$/.test(v.host||''))throw new Error('Enter public IPv4');s.host=v.host;s.phase='manualUser';}
         else if(s.phase==='manualUser'){if(!/^[a-z_][a-z0-9_-]{0,31}$/.test(v.user||''))throw new Error('Enter an SSH login name');s.user=v.user;s.phase='confirm';}
-        else if(s.phase==='confirm'){if(v.confirmed!==true&&v.approved!==true){s.phase='cancelled';return output(s);}delete s.names;s.phase=s.mode==='manual'?'bootstrap':'provision';s.httpStage='create';}
+        else if(s.phase==='confirm'){if(v.confirmed!==true&&v.approved!==true){s.phase='cancelled';return output(s);}delete s.names;delete s.labels;s.phase=s.mode==='manual'?'bootstrap':'provision';s.httpStage='create';}
         else if(s.phase==='deleteConfirm'){
           if(v.confirmed!==true&&v.approved!==true){s.phase='cancelled';return output(s);}
           s.attempt=0;
@@ -1736,7 +1906,7 @@ s.phase=s.accountResumePhase||(s.sshCredentialRef?'options':'sshKey');if(s.accou
         else if(s.phase==='updateConfirm'){if(v.confirmed!==true&&v.approved!==true){s.phase='cancelled';return output(s);}s.phase='update';}
         else if(s.phase==='recreateConfirm'){
           if(v.confirmed!==true&&v.approved!==true){s.phase='recovery';return render(s);}
-          s.allowRecreate=true;s.phase='provision';s.httpStage='reconcile';return render(s);
+          delete s.labels;s.allowRecreate=true;s.phase='provision';s.httpStage='reconcile';return render(s);
         }
         else if(s.phase==='recovery'){
           delete s.verifyKey;delete s.verifyStage;delete s.dropletCheck;delete s.dropletSeen;
@@ -1760,6 +1930,9 @@ s.phase=s.accountResumePhase||(s.sshCredentialRef?'options':'sshKey');if(s.accou
             if(Object.values(s.resources).some(x=>x.status!=='deleted'))throw new Error('Clean up created resources before changing their cloud settings');
             // Its create would go out again under the same step id, and nothing would ever look up what the first one made.
             if(unsettled(s).length)throw new Error('Check current cloud state first: a creation that got no answer may have made a resource');
+            // New settings: a create found absent is no longer the one to send again. Kept, a recovery from the questions
+            // offered it, and it went out with half-changed settings, unchecked and unreviewed (1.0.7 review).
+            delete s.creationAbsent;delete s.allowRecreate;
             s.optionIndex=0;s.phase=s.mode==='manual'?'manual':OPTIONS[s.provider]?'options':'provider';if(s.phase==='options')ask(s);return render(s);
           }
           if(v.action==='account'){s.accountResumePhase=s.interruptedPhase||'options';s.phase='credential';return render(s);}

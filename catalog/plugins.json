@@ -46,7 +46,7 @@
       "id": "io.github.mobilessh.vpnsetup",
       "name": "VPN Setup",
       "description": "Create a cloud WireGuard VPN, register it in Mobile SSH, and manage its clients and cloud resources with a guided, resumable workflow.",
-      "version": "1.0.6",
+      "version": "1.0.7",
       "minBridgeVersion": "1.3.0",
       "role": "connectivity",
       "icon": "plugins/vpnsetup/icon.svg",
@@ -63,7 +63,7 @@
       "files": [
         {
           "path": "README.md",
-          "sha256": "e9a235d24608c84d9a56edc28e166caac5b93d1fa28e4a652a3a78e4c2cf33dd"
+          "sha256": "79c4c7100d07d87c2397e9268f859ca8865be2451b48dff47db3d5aca44c5871"
         },
         {
           "path": "guides/aws.md",
@@ -115,7 +115,7 @@
         },
         {
           "path": "manifest.json",
-          "sha256": "b16ee60bc130e350cb92d65169ec24099d7377a7d3014ef1d8e06aa9ef666f8f"
+          "sha256": "09e71552f73b614d09f8554fcb9e2acd0f256b78b35ce4220081c023cc30d682"
         },
         {
           "path": "server/vpn.py",
@@ -167,7 +167,7 @@
         },
         {
           "path": "tests/worker.test.cjs",
-          "sha256": "3a4e1ac2fc403fa727501cadc0427aceea55bfba99ef9645d303c5c5ba4fb423"
+          "sha256": "674f2235f71e83f10089e14d803b0a17087e3865e64931cad9d91e14117ad01d"
         },
         {
           "path": "ui/app.js",
@@ -183,7 +183,7 @@
         },
         {
           "path": "worker.js",
-          "sha256": "c70c4390a1254ff034db872bac02cbf4c887226c3063695fe06120db6184ce81"
+          "sha256": "f856df9d1c50a7cf0d4ff6ce2200a3f66824f7e5277486f61242235ed7ad46c0"
         }
       ]
     },
